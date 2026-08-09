@@ -141,7 +141,7 @@ export class Ship {
     this.speed = 0;
     this.pitch = 0;     // 浮力俯仰（平滑后）
     this.roll = 0;      // 浮力横摇（平滑后）
-    this.baseY = 0.25;  // 吃水线偏移
+    this.baseY = 0.55;  // 吃水线偏移（抬高干舷，防大浪穿模透过甲板）
 
     this.sinking = false;
     this.sinkT = 0;
@@ -252,9 +252,13 @@ export class Ship {
     const hPort = waveFn(p.x - cosH * 2.0 * ls, p.z + sinH * 2.0 * ls, time);
     const hStar = waveFn(p.x + cosH * 2.0 * ls, p.z - sinH * 2.0 * ls, time);
 
-    const targetY = (hBow + hStern + hPort + hStar) / 4 + this.baseY;
-    const targetPitch = Math.atan2(hStern - hBow, 7.0 * ls);
-    const targetRoll = Math.atan2(hStar - hPort, 4.0 * ls);
+    const avgH = (hBow + hStern + hPort + hStar) / 4;
+    const peakH = Math.max(hBow, hStern, hPort, hStar);
+    // 以波峰为主要参考抬高船体：风浪大时船"骑"在浪上，避免波峰穿模透过甲板
+    const targetY = avgH * 0.35 + peakH * 0.65 + this.baseY;
+    // 俯仰/横摇限幅，防止船头扎浪、船身侧倾过深导致甲板没水
+    const targetPitch = THREE.MathUtils.clamp(Math.atan2(hStern - hBow, 7.0 * ls), -0.15, 0.15);
+    const targetRoll = THREE.MathUtils.clamp(Math.atan2(hStar - hPort, 4.0 * ls), -0.18, 0.18);
 
     // 平滑插值，漂浮感
     const k = 1 - Math.exp(-3 * dt);
