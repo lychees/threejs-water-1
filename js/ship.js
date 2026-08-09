@@ -108,11 +108,16 @@ export class Ship {
       turnRate = 1.0,
     } = opts;
 
-    const model = buildShipModel({ hullColor, sailColor });
-    this.group = model.group;
-    this.setSailAmount = model.setSailAmount;
+    // group 是纯变换节点（浮力/朝向都作用在它上面），外观作为子节点可整体替换
+    this.group = new THREE.Group();
     this.group.rotation.order = 'YXZ';
     scene.add(this.group);
+    this._visual = null;
+    this.setSailAmount = () => {}; // 默认空操作，由具体外观提供
+
+    // 默认外观：程序化低模帆船（真实模型加载失败时的回退）
+    const model = buildShipModel({ hullColor, sailColor });
+    this.setVisual(model.group, model.setSailAmount);
 
     this.scene = scene;
     this.maxHp = hp;
@@ -130,6 +135,14 @@ export class Ship {
     this.sinkT = 0;
     this.sinkDir = 1;
     this.dead = false;  // 沉船动画播完，可移除
+  }
+
+  // 热替换外观（真实模型加载完成后换掉程序化船），运动/浮力逻辑不受影响
+  setVisual(group, sailSetter) {
+    if (this._visual) this.group.remove(this._visual);
+    this._visual = group;
+    this.group.add(group);
+    this.setSailAmount = sailSetter || (() => {});
   }
 
   get forward() {

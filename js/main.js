@@ -5,6 +5,7 @@ import { createSky, SUN_DIR } from './sky.js';
 import { Ship } from './ship.js';
 import { Combat } from './combat.js';
 import { EnemyFleet } from './enemy.js';
+import { loadShipModel, instantiateShip } from './modelship.js';
 
 // ===== 渲染器 / 场景 / 相机 =====
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -41,6 +42,24 @@ const player = new Ship(scene, {
 
 // ===== 敌人 =====
 const fleet = new EnemyFleet(scene, combat);
+
+// ===== 真实帆船模型：异步加载，完成后替换玩家/敌船外观；失败则保持程序化船 =====
+const ENEMY_TINT = { hull: 0x6a7280, sail: 0x9e3030 }; // 深灰船体 + 暗红帆
+loadShipModel().then((template) => {
+  if (!template) return; // 加载失败，回退程序化船
+  const factory = (tint) => instantiateShip(template, tint);
+  // 玩家船
+  const pv = factory(null);
+  player.setVisual(pv.group, pv.setSailAmount);
+  player.setSailAmount(sailLevel / 3);
+  // 敌船工厂（后续新生成的敌船用），并把已在场的敌船一并换装
+  fleet.visualFactory = factory;
+  fleet.enemyTint = ENEMY_TINT;
+  for (const e of fleet.enemies) {
+    const v = factory(ENEMY_TINT);
+    e.setVisual(v.group, v.setSailAmount);
+  }
+});
 
 // ===== 游戏状态 =====
 let state = 'menu'; // menu | playing | over

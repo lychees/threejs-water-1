@@ -13,6 +13,8 @@ export class EnemyFleet {
     this.respawnTimers = [];  // 待补充的倒计时
     this.wave = 1;
     this.killsThisWave = 0;
+    this.visualFactory = null; // 真实模型外观工厂（加载完成后由 main 注入）
+    this.enemyTint = null;
   }
 
   get targetCount() {
@@ -33,6 +35,11 @@ export class EnemyFleet {
     ship.heading = angle + Math.PI; // 大致朝玩家
     ship.orbitDir = Math.random() < 0.5 ? 1 : -1; // 环绕方向
     ship.cooldown = 2 + Math.random() * 3;
+    // 真实模型可用则直接换装（染色版）
+    if (this.visualFactory) {
+      const v = this.visualFactory(this.enemyTint);
+      ship.setVisual(v.group, v.setSailAmount);
+    }
     this.enemies.push(ship);
   }
 
