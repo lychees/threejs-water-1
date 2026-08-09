@@ -90,8 +90,15 @@ export class Combat {
     this.balls = [];
     this.bursts = [];
     this.rings = [];
+    this.particleScale = 1;   // 画质档位缩放粒子数量
+    this.onSplash = null;     // 落水音效钩子
     this.ballGeo = new THREE.SphereGeometry(0.24, 6, 5);
     this.ballMat = new THREE.MeshBasicMaterial({ color: 0x1c1c1c });
+  }
+
+  // 按画质档位缩放粒子数
+  _n(count) {
+    return Math.max(3, Math.round(count * this.particleScale));
   }
 
   /**
@@ -125,14 +132,14 @@ export class Combat {
 
       // 炮口硝烟
       this.bursts.push(new Burst(this.scene, start, {
-        count: 8, color: 0xcccccc, speed: 1.5, up: 1.5, life: 0.9, size: 1.6, gravity: -0.5,
+        count: this._n(8), color: 0xcccccc, speed: 1.5, up: 1.5, life: 0.9, size: 1.6, gravity: -0.5,
       }));
     }
   }
 
   splash(pos) {
     this.bursts.push(new Burst(this.scene, pos, {
-      count: 22, color: 0xeaf7ff, speed: 2.5, up: 5, life: 0.9, size: 0.9, gravity: 12,
+      count: this._n(22), color: 0xeaf7ff, speed: 2.5, up: 5, life: 0.9, size: 0.9, gravity: 12,
     }));
     this.rings.push(new Ring(this.scene, pos));
   }
@@ -140,21 +147,21 @@ export class Combat {
   explosion(pos) {
     // 木屑
     this.bursts.push(new Burst(this.scene, pos, {
-      count: 26, color: 0x9a6a3a, speed: 5, up: 6, life: 1.1, size: 0.9, gravity: 10,
+      count: this._n(26), color: 0x9a6a3a, speed: 5, up: 6, life: 1.1, size: 0.9, gravity: 10,
     }));
     // 硝烟
     this.bursts.push(new Burst(this.scene, pos, {
-      count: 16, color: 0x555555, speed: 1.8, up: 3, life: 1.6, size: 2.2, gravity: -0.6,
+      count: this._n(16), color: 0x555555, speed: 1.8, up: 3, life: 1.6, size: 2.2, gravity: -0.6,
     }));
     // 火花
     this.bursts.push(new Burst(this.scene, pos, {
-      count: 10, color: 0xffc040, speed: 4, up: 5, life: 0.5, size: 1.1, gravity: 6,
+      count: this._n(10), color: 0xffc040, speed: 4, up: 5, life: 0.5, size: 1.1, gravity: 6,
     }));
   }
 
   bubbles(pos) {
     this.bursts.push(new Burst(this.scene, pos, {
-      count: 6, color: 0xdff4ff, speed: 1.2, up: 2.5, life: 1.2, size: 0.8, gravity: -2,
+      count: this._n(6), color: 0xdff4ff, speed: 1.2, up: 2.5, life: 1.2, size: 0.8, gravity: -2,
     }));
   }
 
@@ -178,6 +185,7 @@ export class Combat {
       if (!dead && pos.y < this.waveFn(pos.x, pos.z, time)) {
         pos.y = this.waveFn(pos.x, pos.z, time) + 0.05;
         this.splash(pos);
+        if (this.onSplash) this.onSplash();
         dead = true;
       }
 

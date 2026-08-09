@@ -9,6 +9,8 @@ import { loadShipModel, instantiateShip, SHIP_MODELS, BASE_LENGTH } from './mode
 import { SHIP_DEFS, buildShip, buildFigurehead, computeStats, FALLBACK_STATS, renderShipThumbnail, DEFAULT_SHIP_DEF_ID } from './shipyard.js';
 import { createWorld, ISLAND_DEFS } from './world.js';
 import { WakeManager } from './wake.js';
+import { Weather } from './weather.js';
+import { GameAudio } from './audio.js';
 
 // ===== 渲染器 / 场景 / 相机 =====
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -36,6 +38,37 @@ const water = createWater(SUN_DIR, SURF_ISLANDS);
 scene.add(water.mesh);
 const combat = new Combat(scene, getWaveHeight);
 const wakes = new WakeManager(scene, getWaveHeight);
+const weather = new Weather({
+  scene, camera, renderer,
+  waterUniforms: water.uniforms,
+  skyUniforms: sky.uniforms,
+  sun: sky.sun,
+  hemi: sky.hemi,
+});
+const audio = new GameAudio();
+combat.onSplash = () => audio.splash();
+
+// ===== 画质档位（高/中/低，存 sessionStorage） =====
+const QUALITY_KEY = 'waters-quality';
+const QUALITY_LEVELS = {
+  high: { label: '高', pixelRatio: Math.min(window.devicePixelRatio, 2), detailWaves: 10, particleScale: 1, rainDensity: 1, wakeFoam: true },
+  mid:  { label: '中', pixelRatio: 1.25, detailWaves: 6, particleScale: 0.5, rainDensity: 1, wakeFoam: true },
+  low:  { label: '低', pixelRatio: 1, detailWaves: 0, particleScale: 0.5, rainDensity: 0.5, wakeFoam: false },
+};
+let quality = QUALITY_LEVELS[sessionStorage.getItem(QUALITY_KEY)] ? sessionStorage.getItem(QUALITY_KEY) : 'high';
+
+function applyQuality(q) {
+  quality = q;
+  const def = QUALITY_LEVELS[q];
+  sessionStorage.setItem(QUALITY_KEY, q);
+  renderer.setPixelRatio(def.pixelRatio);
+  water.setDetailWaves(def.detailWaves);
+  combat.particleScale = def.particleScale;
+  weather.setRainDensity(def.rainDensity);
+  wakes.foamEnabled = def.wakeFoam;
+  const btn = $('quality-btn');
+  if (btn) btn.textContent = `画质：${def.label}`;
+}
 
 // ===== 操控与氛围参数 =====
 const ASTERN_SPEED_RATIO = 0.3; // 倒退档速度 = 极速 × 30%
@@ -268,6 +301,7 @@ function updateHUD() {
   $('kills').textContent = kills;
   $('loot').textContent = loot;
   $('wave').textContent = fleet.wave;
+  $('weather-icon').textContent = weather.isStorm ? '⛈️' : '☀️';
   $('sail-state').textContent = sailLevel < 0
     ? '帆位：倒车（W 复位升帆）'
     : `帆位：${SAIL_NAMES[sailLevel]}（W 升帆 / S 降帆）`;
@@ -282,6 +316,76 @@ loadShipStats().then(() => {
   applyShipChoice(selectedShipId);
 });
 
+// ===== HUD 小按钮（画质 / 静音）与天气图标 =====
+function syncMuteBtn(muted) {
+  const btn = $('mute-btn');
+  if (btn) btn.textContent = muted ? '🔇' : '🔊';
+}
+
+$('quality-btn').addEventListener('click', () => {
+  const order = ['high', 'mid', 'low'];
+  applyQuality(order[(order.indexOf(quality) + 1) % order.length]);
+});
+$('mute-btn').addEventListener('click', () => {
+  audio.init(); // 按钮本身也是用户交互，可直接初始化
+  syncMuteBtn(audio.toggleMute());
+});
+applyQuality(quality);
+syncMuteBtn(audio.muted);
+
+// ===== 触屏摇杆（仅触屏设备显示） =====
+let touchTurn = 0; // 摇杆横轴转向输入（-1 ~ 1）
+(function initTouchUI() {
+  const isTouch = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+  if (!isTouch) return;
+  document.body.classList.add('touch');
+
+  const joy = $('joystick');
+  const knob = $('joy-knob');
+  let joyId = null;
+
+  function updateKnob(t) {
+    const rect = joy.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    let dx = t.clientX - cx;
+    let dy = t.clientY - cy;
+    const r = rect.width / 2;
+    const len = Math.hypot(dx, dy);
+    if (len > r) { dx = (dx / len) * r; dy = (dy / len) * r; }
+    knob.style.transform = `translate(${dx}px, ${dy}px)`;
+    touchTurn = dx / r; // 右转为正
+    // 纵轴映射帆位：上推升档（0~3），下推到底倒车（-1），回中降帆
+    const fy = dy / r;
+    const level = fy < -0.2 ? Math.min(3, Math.round(-fy * 3)) : fy > 0.35 ? -1 : 0;
+    if (level !== sailLevel && state === 'playing' && camMode !== 3) setSail(level);
+  }
+
+  joy.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    joyId = e.changedTouches[0].identifier;
+    updateKnob(e.changedTouches[0]);
+  }, { passive: false });
+  joy.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    for (const t of e.changedTouches) if (t.identifier === joyId) updateKnob(t);
+  }, { passive: false });
+  const joyEnd = (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === joyId) {
+        joyId = null;
+        touchTurn = 0;
+        knob.style.transform = 'translate(0, 0)';
+      }
+    }
+  };
+  joy.addEventListener('touchend', joyEnd);
+  joy.addEventListener('touchcancel', joyEnd);
+
+  $('fire-l').addEventListener('touchstart', (e) => { e.preventDefault(); fire(-1); }, { passive: false });
+  $('fire-r').addEventListener('touchstart', (e) => { e.preventDefault(); fire(1); }, { passive: false });
+})();
+
 // ===== 拾取飘字 =====
 function floatText(msg) {
   const el = document.createElement('div');
@@ -295,6 +399,7 @@ function floatText(msg) {
 // 漂浮补给拾取：木桶/木箱修船，宝箱记战利品
 function onPickup(item) {
   combat.splash(item.mesh.position.clone());
+  audio.pickup();
   if (item.kind === 'repair') {
     player.hp = Math.min(player.maxHp, player.hp + 10);
     floatText('+10 修复');
@@ -308,26 +413,56 @@ function onPickup(item) {
 const keys = {};
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
+  if (e.code === 'KeyM') { syncMuteBtn(audio.toggleMute()); return; }
+  if (e.code === 'Digit1') { setCamMode(1); return; }
+  if (e.code === 'Digit2') { setCamMode(2); return; }
+  if (e.code === 'Digit3') { setCamMode(3); return; }
   if (state !== 'playing') return;
-  if (e.code === 'KeyW') setSail(Math.min(3, sailLevel + 1));
-  if (e.code === 'KeyS') setSail(Math.max(-1, sailLevel - 1)); // 停船后继续降帆进入倒退档
+  if (camMode !== 3) { // 飞行模式下船的键盘操控失效，保持当前帆位直行
+    if (e.code === 'KeyW') setSail(Math.min(3, sailLevel + 1));
+    if (e.code === 'KeyS') setSail(Math.max(-1, sailLevel - 1)); // 停船后继续降帆进入倒退档
+  }
   if (e.code === 'KeyQ') fire(-1);
   if (e.code === 'KeyE') fire(1);
 });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
-// 鼠标：移动环视；左键左舷齐射，右键右舷齐射
+// 鼠标：模式1 移动环视 + 点击齐射；模式2/3 拖拽转视角（齐射用 Q/E）
 let mouseNX = 0; // -0.5 ~ 0.5
 let mouseNY = 0;
+let dragging = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
 window.addEventListener('mousemove', (e) => {
   mouseNX = e.clientX / window.innerWidth - 0.5;
   mouseNY = e.clientY / window.innerHeight - 0.5;
+  if (dragging) {
+    const dx = e.clientX - lastMouseX;
+    const dy = e.clientY - lastMouseY;
+    if (camMode === 2) {
+      orbitYaw -= dx * 0.005;
+      orbitPitch = THREE.MathUtils.clamp(orbitPitch + dy * 0.005, 0.05, 1.4);
+    } else if (camMode === 3) {
+      fly.yaw -= dx * 0.004;
+      fly.pitch = THREE.MathUtils.clamp(fly.pitch - dy * 0.004, -1.3, 1.3);
+    }
+  }
+  lastMouseX = e.clientX;
+  lastMouseY = e.clientY;
 });
 window.addEventListener('mousedown', (e) => {
   if (state !== 'playing') return;
-  if (e.button === 0) fire(-1);
-  if (e.button === 2) fire(1);
+  if (camMode === 1) {
+    if (e.button === 0) fire(-1);
+    if (e.button === 2) fire(1);
+  } else if (e.button === 0) {
+    dragging = true;
+  }
 });
+window.addEventListener('mouseup', () => { dragging = false; });
+window.addEventListener('wheel', (e) => {
+  if (camMode === 2) orbitDist = THREE.MathUtils.clamp(orbitDist + e.deltaY * 0.02, 6, 40);
+}, { passive: true });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 
 function setSail(level) {
@@ -339,7 +474,8 @@ function fire(side) {
   if (player.sinking) return;
   if (side < 0 && cooldownL > 0) return;
   if (side > 0 && cooldownR > 0) return;
-  combat.fireBroadside(player, side, { count: 3, speed: 30, spread: 0.05, fromPlayer: true });
+  combat.fireBroadside(player, side, { speed: 30, spread: 0.05, fromPlayer: true }); // 炮数取 ship.cannons
+  audio.cannon();
   if (side < 0) cooldownL = RELOAD_TIME;
   else cooldownR = RELOAD_TIME;
 }
@@ -349,6 +485,8 @@ function begin() {
   $('start-overlay').classList.add('hidden');
   hud.classList.remove('hidden');
   state = 'playing';
+  audio.init(); // AudioContext 需在用户交互后创建
+  syncMuteBtn(audio.muted);
   setSail(2);
   fleet.spawnOne(player.position);
   fleet.spawnOne(player.position);
@@ -377,6 +515,7 @@ window.addEventListener('keydown', (e) => {
 // ===== 命中回调 =====
 function onHit(ball, target) {
   const dmg = target.isPlayer ? 12 : 20;
+  audio.hit();
   const sunk = target.ship.takeDamage(dmg);
   if (sunk && target.isPlayer) gameOver();
 }
@@ -390,32 +529,113 @@ const fleetHooks = {
   },
 };
 
-// ===== 相机 =====
+// ===== 相机（1 跟随 / 2 自由环绕 / 3 自由飞行，数字键切换，0.5s 平滑过渡） =====
 let camYaw = 0;
 let camPitch = 0.32;
 const camTarget = new THREE.Vector3();
+let camMode = 1;
+let camBlend = 1;                       // 切换过渡 0→1
+const CAM_BLEND_TIME = 0.5;
+const prevCamPos = new THREE.Vector3();
+const prevCamQuat = new THREE.Quaternion();
+// 模式 2：自由环绕
+let orbitYaw = Math.PI;
+let orbitPitch = 0.35;
+let orbitDist = 15;
+// 模式 3：自由飞行
+const fly = { yaw: 0, pitch: 0, speed: 30 };
+const CAM_MODE_NAMES = { 1: '跟随', 2: '环绕', 3: '飞行' };
+
+function setCamMode(m) {
+  if (m === camMode) return;
+  prevCamPos.copy(camera.position);
+  prevCamQuat.copy(camera.quaternion);
+  camBlend = 0;
+  camMode = m;
+  if (m === 2) orbitYaw = player.heading + Math.PI + camYaw; // 从当前视角接续
+  if (m === 3) {
+    fly.yaw = player.heading + Math.PI;
+    fly.pitch = 0.15;
+  }
+  const el = $('cam-mode');
+  if (el) el.textContent = CAM_MODE_NAMES[m];
+  updateHelp();
+}
+
+function updateHelp() {
+  const tips = {
+    1: 'W/S 升降帆调速 · A/D 转向 · 移动鼠标环视 · 左键/Q 左舷齐射 · 右键/E 右舷齐射 · 1/2/3 相机',
+    2: '拖拽旋转 · 滚轮缩放 · Q/E 齐射 · 按 1 返回跟随',
+    3: '拖拽转向 · WASD 平移 · Q/E 升降 · 船保持帆位直行 · 按 1 返回跟随',
+  };
+  const el = $('help');
+  if (el) el.textContent = tips[camMode];
+}
 
 function updateCamera(dt, time) {
   const p = player.position;
-  // 平滑逼近鼠标目标角度
-  const k = 1 - Math.exp(-6 * dt);
-  camYaw += (-mouseNX * Math.PI * 1.4 - camYaw) * k;
-  camPitch += (THREE.MathUtils.clamp(0.3 + mouseNY * 0.9, 0.06, 1.1) - camPitch) * k;
+  const pos = new THREE.Vector3();
+  const look = new THREE.Vector3(p.x, p.y + 3, p.z);
 
-  const dist = 15;
-  const angle = player.heading + Math.PI + camYaw; // 默认在船尾后方
-  const horiz = Math.cos(camPitch) * dist;
-  const cx = p.x + Math.sin(angle) * horiz;
-  const cz = p.z + Math.cos(angle) * horiz;
-  let cy = p.y + 2.5 + Math.sin(camPitch) * dist;
-  // 镜头受波浪轻微影响；允许入水（水下过渡），但保底不坠向海底
-  const waveAtCam = getWaveHeight(cx, cz, time);
-  cy += waveAtCam * 0.25;
-  cy = Math.max(cy, waveAtCam - CAM_MAX_DIP);
+  if (camMode === 1) {
+    // 跟随：平滑逼近鼠标目标角度
+    const k = 1 - Math.exp(-6 * dt);
+    camYaw += (-mouseNX * Math.PI * 1.4 - camYaw) * k;
+    camPitch += (THREE.MathUtils.clamp(0.3 + mouseNY * 0.9, 0.06, 1.1) - camPitch) * k;
+    const dist = 15;
+    const angle = player.heading + Math.PI + camYaw; // 默认在船尾后方
+    const horiz = Math.cos(camPitch) * dist;
+    pos.set(p.x + Math.sin(angle) * horiz, 0, p.z + Math.cos(angle) * horiz);
+    pos.y = p.y + 2.5 + Math.sin(camPitch) * dist;
+  } else if (camMode === 2) {
+    // 自由环绕：角度不回弹，滚轮缩放
+    const horiz = Math.cos(orbitPitch) * orbitDist;
+    pos.set(p.x + Math.sin(orbitYaw) * horiz, 0, p.z + Math.cos(orbitYaw) * horiz);
+    pos.y = p.y + 2.0 + Math.sin(orbitPitch) * orbitDist;
+  } else {
+    // 自由飞行：WASD 平移 + Q/E 升降，拖拽转向；船保持帆位直行
+    const dir = new THREE.Vector3(
+      Math.sin(fly.yaw) * Math.cos(fly.pitch),
+      Math.sin(fly.pitch),
+      Math.cos(fly.yaw) * Math.cos(fly.pitch)
+    );
+    const right = new THREE.Vector3(Math.cos(fly.yaw), 0, -Math.sin(fly.yaw));
+    const move = new THREE.Vector3();
+    if (keys['KeyW']) move.add(dir);
+    if (keys['KeyS']) move.sub(dir);
+    if (keys['KeyA']) move.sub(right);
+    if (keys['KeyD']) move.add(right);
+    if (keys['KeyE']) move.y += 1;
+    if (keys['KeyQ']) move.y -= 1;
+    if (move.lengthSq() > 0) {
+      move.normalize().multiplyScalar(fly.speed * dt);
+      camera.position.add(move);
+    }
+    pos.copy(camera.position); // 飞行模式位置即状态
+    look.copy(pos).add(dir);
+  }
 
-  camera.position.set(cx, cy, cz);
-  camTarget.set(p.x, p.y + 3, p.z);
-  camera.lookAt(camTarget);
+  // 跟随/环绕：镜头受波浪轻微影响；允许入水（水下过渡），保底不坠向海底
+  if (camMode !== 3) {
+    const waveAtCam = getWaveHeight(pos.x, pos.z, time);
+    pos.y += waveAtCam * 0.25;
+    pos.y = Math.max(pos.y, waveAtCam - CAM_MAX_DIP);
+  } else {
+    pos.y = Math.max(pos.y, getWaveHeight(pos.x, pos.z, time) - CAM_MAX_DIP);
+  }
+
+  // 模式切换 0.5s 平滑过渡
+  if (camBlend < 1) {
+    camBlend = Math.min(1, camBlend + dt / CAM_BLEND_TIME);
+    pos.lerpVectors(prevCamPos, pos, camBlend);
+    camera.position.copy(pos);
+    camera.lookAt(look);
+    const newQuat = camera.quaternion.clone();
+    camera.quaternion.slerpQuaternions(prevCamQuat, newQuat, camBlend);
+  } else {
+    camera.position.copy(pos);
+    camera.lookAt(look);
+  }
 }
 
 // 水下过渡：镜头低于当地波面 → 浓雾 + 蓝绿遮罩，0.3s 插值
@@ -424,12 +644,12 @@ function updateUnderwater(dt, time) {
   const target = cam.y < getWaveHeight(cam.x, cam.z, time) ? 1 : 0;
   underT += (target - underT) * Math.min(1, dt / 0.3);
   if (scene.fog) {
-    scene.fog.color.lerpColors(SURFACE_FOG.color, UNDER_FOG.color, underT);
+    scene.fog.color.lerpColors(weather.fogColor, UNDER_FOG.color, underT); // 水上面跟随天气
     scene.fog.near = THREE.MathUtils.lerp(SURFACE_FOG.near, UNDER_FOG.near, underT);
     scene.fog.far = THREE.MathUtils.lerp(SURFACE_FOG.far, UNDER_FOG.far, underT);
   }
   $('uw-overlay').style.opacity = (underT * 0.85).toFixed(3);
-  // TODO(音频): 此处可用 underT 驱动环境音低通滤波实现闷化
+  // TODO(音频): 此处可用 underT 驱动环境音低通滤波实现闷化（已通过 setEnvironment 接入）
 }
 
 // ===== 主循环 =====
@@ -440,21 +660,26 @@ renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   time += dt;
 
-  // 玩家操控
+  // 玩家操控（风暴时极速 ×0.9、操控略钝；飞行模式下舵效输入失效）
   if (state === 'playing' && !player.sinking) {
+    const weatherSpeedMul = 1 - weather.strength * 0.1;
     // 倒退档：sailLevel = -1，缓慢倒车
-    const targetSpeed = sailLevel >= 0
+    const targetSpeed = (sailLevel >= 0
       ? (sailLevel / 3) * player.maxSpeed
-      : -ASTERN_SPEED_RATIO * player.maxSpeed;
+      : -ASTERN_SPEED_RATIO * player.maxSpeed) * weatherSpeedMul;
     player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
-    let turn = 0;
-    if (keys['KeyA']) turn -= 1;
-    if (keys['KeyD']) turn += 1;
-    // 舵是翼面：舵效 ∝ 航速（低速几乎转不动），倒车时舵效反向
-    const speedRatio = Math.min(1, Math.abs(player.speed) / player.maxSpeed);
-    const rudderEff = RUDDER_MIN_EFF + (1 - RUDDER_MIN_EFF) * Math.pow(speedRatio, RUDDER_CURVE);
-    const rudderDir = player.speed < -0.3 ? -1 : 1;
-    player.heading += turn * player.turnRate * rudderEff * rudderDir * dt;
+    if (camMode !== 3) {
+      let turn = 0;
+      if (keys['KeyA']) turn -= 1;
+      if (keys['KeyD']) turn += 1;
+      turn += touchTurn; // 触屏摇杆转向
+      // 舵是翼面：舵效 ∝ 航速（低速几乎转不动），倒车时舵效反向
+      const speedRatio = Math.min(1, Math.abs(player.speed) / player.maxSpeed);
+      const rudderEff = RUDDER_MIN_EFF + (1 - RUDDER_MIN_EFF) * Math.pow(speedRatio, RUDDER_CURVE);
+      const rudderDir = player.speed < -0.3 ? -1 : 1;
+      const weatherTurnMul = 1 - weather.strength * 0.15;
+      player.heading += turn * player.turnRate * rudderEff * rudderDir * weatherTurnMul * dt;
+    }
   }
 
   // 冷却
@@ -502,8 +727,10 @@ renderer.setAnimationLoop(() => {
 
   water.update(time);
   sky.update(dt);
+  weather.update(dt);
   updateCamera(dt, time);
   updateUnderwater(dt, time);
+  audio.setEnvironment(weather.strength, camera.position.y, underT);
   updateHUD();
 
   renderer.render(scene, camera);

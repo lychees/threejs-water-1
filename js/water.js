@@ -26,17 +26,26 @@ const WAVES = RAW_WAVES.map((w) => {
 });
 
 // CPU 端波高采样（供浮力 / 落水判定使用；忽略水平位移，q 较小误差可接受）
+// 天气系统通过 setWaveScale 全局缩放振幅，CPU 与 GPU 保持一致
+let cpuWaveScale = 1;
+let waterUniforms = null; // createWater 后指向其 uniforms
+export function setWaveScale(s) {
+  cpuWaveScale = s;
+  if (waterUniforms) waterUniforms.uWaveScale.value = s;
+}
+
 export function getWaveHeight(x, z, t) {
   let y = 0;
   for (let i = 0; i < WAVE_COUNT; i++) {
     const w = WAVES[i];
     y += w.amp * Math.sin(w.k * (w.dx * x + w.dz * z) - w.omega * t);
   }
-  return y;
+  return y * cpuWaveScale;
 }
 
 const vertexShader = /* glsl */ `
   uniform float uTime;
+  uniform float uWaveScale;            // 天气驱动的振幅全局缩放（与 CPU 浮力一致）
   uniform vec4 uWaves[${WAVE_COUNT}];  // dirX, dirZ, amp, k
   uniform vec4 uWave2[${WAVE_COUNT}];  // omega, q, -, -
 
@@ -59,7 +68,7 @@ const vertexShader = /* glsl */ `
 
     for (int i = 0; i < ${WAVE_COUNT}; i++) {
       vec2 d = uWaves[i].xy;
-      float amp = uWaves[i].z;
+      float amp = uWaves[i].z * uWaveScale;
       float k = uWaves[i].w;
       float omega = uWave2[i].x;
       float q = uWave2[i].y;
@@ -107,6 +116,9 @@ const fragmentShader = /* glsl */ `
   uniform vec3 uSSSColor;
   uniform vec3 uFoamColor;
   uniform vec4 uIslands[4]; // x, z, 碎浪带半径, 呼吸相位（半径为 0 表示空槽位）
+  uniform float uFoamBoost;    // 天气驱动：风暴时白沫阈值降低
+  uniform float uCloudAmount;  // 云影强度（晴天淡、风暴浓）
+  uniform float uDetailWaves;  // 细节小波数量上限（画质档位）
 
   ${SKY_GLSL}
 
@@ -140,9 +152,10 @@ const fragmentShader = /* glsl */ `
     // ---- 细节法线：10 个高频小波（只扰动法线不做位移，随距离衰减防远处闪烁） ----
     vec3 n = normalize(vNormal);
     float detailFade = 1.0 - smoothstep(40.0, 170.0, camDist);
-    if (detailFade > 0.001) {
+    if (detailFade > 0.001 && uDetailWaves > 0.5) {
       vec2 dn = vec2(0.0);
       for (int i = 0; i < 10; i++) {
+        if (float(i) >= uDetailWaves) break; // 画质档位控制
         float fi = float(i);
         float ang = fi * 2.39996 + 0.7;        // 黄金角让方向均匀分散
         vec2 d = vec2(cos(ang), sin(ang));
@@ -166,6 +179,10 @@ const fragmentShader = /* glsl */ `
     float fres = 0.04 + 0.96 * pow(1.0 - max(dot(n, v), 0.0), 5.0); // Schlick
     col = mix(col, refl, clamp(fres * 1.1, 0.0, 1.0));
 
+    // ---- 云影：大尺度慢速漂移噪声暗化（与天气联动） ----
+    float cloudN = vnoise(vWorldPos.xz * 0.006 + vec2(uTime * 0.008, uTime * 0.005));
+    col *= mix(1.0, 0.8 + 0.2 * cloudN, uCloudAmount);
+
     // ---- 次表面散射：视线朝向太阳时，浪峰透出青绿辉光 ----
     float crest = smoothstep(0.45, 0.95, vHeight);
     float sss = pow(max(dot(v, uSunDir), 0.0), 3.0) * crest;
@@ -181,7 +198,7 @@ const fragmentShader = /* glsl */ `
 
     // ---- 破浪白沫：雅可比 + 波高阈值，噪声打散边缘，波谷渐隐 ----
     float foamN = vnoise(vWorldPos.xz * 2.3 + vec2(uTime * 0.12, -uTime * 0.09));
-    float foamBase = clamp(vFoam * 1.1 + smoothstep(0.6, 0.92, vHeight) * 0.55, 0.0, 1.0);
+    float foamBase = clamp(vFoam * 1.1 + smoothstep(0.6, 0.92, vHeight) * 0.55 + uFoamBoost, 0.0, 1.0);
     float foam = smoothstep(0.42, 0.72, foamBase + (foamN - 0.5) * 0.45);
     foam *= smoothstep(0.28, 0.5, vHeight);            // 波谷处泡沫渐隐
 
@@ -216,6 +233,10 @@ export function createWater(sunDir, islands = []) {
     THREE.UniformsLib.fog,
     {
       uTime: { value: 0 },
+      uWaveScale: { value: 1 },
+      uFoamBoost: { value: 0 },
+      uCloudAmount: { value: 0.15 },
+      uDetailWaves: { value: 10 },
       uDeepColor: { value: new THREE.Color(0x0b3b5e) },
       uShallowColor: { value: new THREE.Color(0x1e9e9a) },
       uSSSColor: { value: new THREE.Color(0x35d0b0) },
@@ -247,8 +268,12 @@ export function createWater(sunDir, islands = []) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
 
+  waterUniforms = uniforms; // 供 setWaveScale 使用
+
   return {
     mesh,
+    uniforms,
+    setDetailWaves(n) { uniforms.uDetailWaves.value = n; },
     update(time) {
       uniforms.uTime.value = time;
     },

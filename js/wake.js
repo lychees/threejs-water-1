@@ -22,6 +22,7 @@ export class WakeManager {
   constructor(scene, waveFn) {
     this.scene = scene;
     this.waveFn = waveFn;
+    this.foamEnabled = true;  // 低画质档关闭泡沫带（保留推波环）
     this.foams = [];            // { mesh, age, life, size, alive } 共享池
     this.shipState = new Map(); // ship -> { spawnT, rings: [{mesh, phase}] }
   }
@@ -92,7 +93,7 @@ export class WakeManager {
       const p = ship.position;
 
       // 船尾泡沫带：按速度间隔在船尾留下泡沫 quad（世界锚定，不随船走）
-      if (active) {
+      if (active && this.foamEnabled) {
         st.spawnT -= dt;
         if (st.spawnT <= 0) {
           st.spawnT = 0.5 - speedRatio * 0.35; // 越快越密

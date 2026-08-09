@@ -114,6 +114,9 @@ export function createSky(scene) {
   // （岛屿已改由 js/world.js 的真实模型布置）
 
   return {
+    uniforms: skyMat.uniforms, // 天气系统驱动天空颜色
+    sun,
+    hemi,
     update(dt) {
       // 云缓慢漂移，飘远了绕回另一侧
       for (const c of clouds) {

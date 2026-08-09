@@ -39,6 +39,19 @@
   /* ===== 水下色调遮罩 ===== */
   #uw-overlay { position: fixed; inset: 0; pointer-events: none; z-index: 5; opacity: 0; background: linear-gradient(rgba(12, 78, 88, .5), rgba(5, 38, 52, .68)); }
 
+  /* ===== HUD 小按钮 ===== */
+  .hud-btn { pointer-events: auto; cursor: pointer; color: #fff; font-size: 15px; font-weight: bold; font-family: inherit; }
+  .hud-btn:hover { border-color: #e8a33d; }
+
+  /* ===== 触屏控件 ===== */
+  #touch-ui { display: none; }
+  body.touch #touch-ui { display: block; }
+  #joystick { position: fixed; left: 30px; bottom: 130px; width: 130px; height: 130px; border-radius: 50%; background: rgba(0,20,35,.4); border: 2px solid rgba(255,255,255,.3); pointer-events: auto; touch-action: none; z-index: 6; }
+  #joy-knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: rgba(232,163,61,.75); border: 2px solid rgba(255,255,255,.5); pointer-events: none; }
+  #touch-fire { position: fixed; right: 30px; bottom: 130px; display: flex; flex-direction: column; gap: 14px; z-index: 6; }
+  #touch-fire button { width: 84px; height: 64px; border-radius: 16px; border: 2px solid rgba(255,255,255,.35); background: rgba(0,20,35,.5); color: #fff; font-size: 17px; font-weight: bold; pointer-events: auto; touch-action: none; }
+  #touch-fire button:active { background: rgba(232,163,61,.5); }
+
   /* ===== 拾取飘字 ===== */
   .float-text { position: absolute; left: 50%; bottom: 30%; transform: translateX(-50%); font-size: 22px; font-weight: bold; color: #ffd76e; text-shadow: 0 2px 6px rgba(0,0,0,.7); animation: floatUp 1.5s ease-out forwards; pointer-events: none; }
   @keyframes floatUp {
@@ -92,6 +105,10 @@
     <div class="stat">击沉 <span id="kills">0</span></div>
     <div class="stat">战利品 <span id="loot">0</span></div>
     <div class="stat">第 <span id="wave">1</span> 波</div>
+    <div class="stat">天气 <span id="weather-icon">☀️</span></div>
+    <div class="stat">相机 <span id="cam-mode">跟随</span></div>
+    <button id="quality-btn" class="stat hud-btn">画质：高</button>
+    <button id="mute-btn" class="stat hud-btn">🔊</button>
   </div>
   <div id="hp-wrap">
     <div class="bar-label">船体耐久</div>
@@ -102,7 +119,16 @@
     <div class="reload-row">左舷（鼠标左键 / Q）<div class="reload-bar"><div id="reload-l"></div></div></div>
     <div class="reload-row">右舷（鼠标右键 / E）<div class="reload-bar"><div id="reload-r"></div></div></div>
   </div>
-  <div id="help">W/S 升降帆调速 · A/D 转向 · 移动鼠标环视 · 左键/Q 左舷齐射 · 右键/E 右舷齐射</div>
+  <div id="help">W/S 升降帆调速 · A/D 转向 · 移动鼠标环视 · 左键/Q 左舷齐射 · 右键/E 右舷齐射 · 1/2/3 相机</div>
+</div>
+
+<!-- 触屏控件（仅触屏设备显示） -->
+<div id="touch-ui">
+  <div id="joystick"><div id="joy-knob"></div></div>
+  <div id="touch-fire">
+    <button id="fire-l">左舷</button>
+    <button id="fire-r">右舷</button>
+  </div>
 </div>
 
 <!-- 开始遮罩 -->
