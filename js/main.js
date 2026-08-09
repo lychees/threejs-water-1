@@ -7,7 +7,8 @@ import { Combat } from './combat.js';
 import { EnemyFleet } from './enemy.js';
 import { loadShipModel, instantiateShip, SHIP_MODELS, BASE_LENGTH } from './modelship.js';
 import { SHIP_DEFS, buildShip, buildFigurehead, computeStats, FALLBACK_STATS, renderShipThumbnail, DEFAULT_SHIP_DEF_ID } from './shipyard.js';
-import { createWorld } from './world.js';
+import { createWorld, ISLAND_DEFS } from './world.js';
+import { WakeManager } from './wake.js';
 
 // ===== 渲染器 / 场景 / 相机 =====
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -29,9 +30,21 @@ window.addEventListener('resize', () => {
 
 // ===== 世界 =====
 const sky = createSky(scene);
-const water = createWater(SUN_DIR);
+// 岛屿碎浪带 uniform 数据（与 world.js 碰撞半径同源：size × 0.45）
+const SURF_ISLANDS = ISLAND_DEFS.map((d) => ({ x: d.pos[0], z: d.pos[1], radius: d.size * 0.45 }));
+const water = createWater(SUN_DIR, SURF_ISLANDS);
 scene.add(water.mesh);
 const combat = new Combat(scene, getWaveHeight);
+const wakes = new WakeManager(scene, getWaveHeight);
+
+// ===== 操控与氛围参数 =====
+const ASTERN_SPEED_RATIO = 0.3; // 倒退档速度 = 极速 × 30%
+const RUDDER_CURVE = 1.5;       // 舵效 ∝ (航速/极速)^RUDDER_CURVE（舵是翼面）
+const RUDDER_MIN_EFF = 0.05;    // 静止时的残存舵效
+const CAM_MAX_DIP = 6.0;        // 相机允许没入波面下的最大深度（不穿海底的底线）
+const SURFACE_FOG = { color: new THREE.Color(0xcfe9f3), near: 90, far: 460 };
+const UNDER_FOG = { color: new THREE.Color(0x0a4a4e), near: 2, far: 70 };
+let underT = 0;                 // 0 水上 ~ 1 水下（0.3s 插值）
 
 // ===== 玩家 =====
 const player = new Ship(scene, {
@@ -255,7 +268,9 @@ function updateHUD() {
   $('kills').textContent = kills;
   $('loot').textContent = loot;
   $('wave').textContent = fleet.wave;
-  $('sail-state').textContent = `帆位：${SAIL_NAMES[sailLevel]}（W 升帆 / S 降帆）`;
+  $('sail-state').textContent = sailLevel < 0
+    ? '帆位：倒车（W 复位升帆）'
+    : `帆位：${SAIL_NAMES[sailLevel]}（W 升帆 / S 降帆）`;
   $('reload-l').style.width = `${(1 - cooldownL / RELOAD_TIME) * 100}%`;
   $('reload-r').style.width = `${(1 - cooldownR / RELOAD_TIME) * 100}%`;
 }
@@ -295,7 +310,7 @@ window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
   if (state !== 'playing') return;
   if (e.code === 'KeyW') setSail(Math.min(3, sailLevel + 1));
-  if (e.code === 'KeyS') setSail(Math.max(0, sailLevel - 1));
+  if (e.code === 'KeyS') setSail(Math.max(-1, sailLevel - 1)); // 停船后继续降帆进入倒退档
   if (e.code === 'KeyQ') fire(-1);
   if (e.code === 'KeyE') fire(1);
 });
@@ -317,7 +332,7 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 
 function setSail(level) {
   sailLevel = level;
-  player.setSailAmount(level / 3);
+  player.setSailAmount(Math.max(0, level) / 3); // 倒退档时帆面按收帆显示
 }
 
 function fire(side) {
@@ -393,13 +408,28 @@ function updateCamera(dt, time) {
   const cx = p.x + Math.sin(angle) * horiz;
   const cz = p.z + Math.cos(angle) * horiz;
   let cy = p.y + 2.5 + Math.sin(camPitch) * dist;
-  // 镜头受波浪轻微影响，且不入水
-  cy += getWaveHeight(cx, cz, time) * 0.25;
-  cy = Math.max(cy, getWaveHeight(cx, cz, time) + 2.0);
+  // 镜头受波浪轻微影响；允许入水（水下过渡），但保底不坠向海底
+  const waveAtCam = getWaveHeight(cx, cz, time);
+  cy += waveAtCam * 0.25;
+  cy = Math.max(cy, waveAtCam - CAM_MAX_DIP);
 
   camera.position.set(cx, cy, cz);
   camTarget.set(p.x, p.y + 3, p.z);
   camera.lookAt(camTarget);
+}
+
+// 水下过渡：镜头低于当地波面 → 浓雾 + 蓝绿遮罩，0.3s 插值
+function updateUnderwater(dt, time) {
+  const cam = camera.position;
+  const target = cam.y < getWaveHeight(cam.x, cam.z, time) ? 1 : 0;
+  underT += (target - underT) * Math.min(1, dt / 0.3);
+  if (scene.fog) {
+    scene.fog.color.lerpColors(SURFACE_FOG.color, UNDER_FOG.color, underT);
+    scene.fog.near = THREE.MathUtils.lerp(SURFACE_FOG.near, UNDER_FOG.near, underT);
+    scene.fog.far = THREE.MathUtils.lerp(SURFACE_FOG.far, UNDER_FOG.far, underT);
+  }
+  $('uw-overlay').style.opacity = (underT * 0.85).toFixed(3);
+  // TODO(音频): 此处可用 underT 驱动环境音低通滤波实现闷化
 }
 
 // ===== 主循环 =====
@@ -412,14 +442,19 @@ renderer.setAnimationLoop(() => {
 
   // 玩家操控
   if (state === 'playing' && !player.sinking) {
-    const targetSpeed = (sailLevel / 3) * player.maxSpeed;
+    // 倒退档：sailLevel = -1，缓慢倒车
+    const targetSpeed = sailLevel >= 0
+      ? (sailLevel / 3) * player.maxSpeed
+      : -ASTERN_SPEED_RATIO * player.maxSpeed;
     player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
     let turn = 0;
     if (keys['KeyA']) turn -= 1;
     if (keys['KeyD']) turn += 1;
-    // 速度越快舵效越好，但停船也能缓慢转向
-    const steer = player.turnRate * (0.35 + 0.65 * (player.speed / player.maxSpeed));
-    player.heading += turn * steer * dt;
+    // 舵是翼面：舵效 ∝ 航速（低速几乎转不动），倒车时舵效反向
+    const speedRatio = Math.min(1, Math.abs(player.speed) / player.maxSpeed);
+    const rudderEff = RUDDER_MIN_EFF + (1 - RUDDER_MIN_EFF) * Math.pow(speedRatio, RUDDER_CURVE);
+    const rudderDir = player.speed < -0.3 ? -1 : 1;
+    player.heading += turn * player.turnRate * rudderEff * rudderDir * dt;
   }
 
   // 冷却
@@ -429,6 +464,7 @@ renderer.setAnimationLoop(() => {
   // 实体更新
   player.update(dt, time, getWaveHeight);
   fleet.update(dt, time, player, getWaveHeight, fleetHooks);
+  wakes.update(dt, time, [player, ...fleet.enemies]);
 
   // 世界：岛屿碰撞 + 浮标/补给动画与拾取
   if (world) {
@@ -467,6 +503,7 @@ renderer.setAnimationLoop(() => {
   water.update(time);
   sky.update(dt);
   updateCamera(dt, time);
+  updateUnderwater(dt, time);
   updateHUD();
 
   renderer.render(scene, camera);

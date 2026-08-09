@@ -106,6 +106,7 @@ const fragmentShader = /* glsl */ `
   uniform vec3 uShallowColor;
   uniform vec3 uSSSColor;
   uniform vec3 uFoamColor;
+  uniform vec4 uIslands[4]; // x, z, 碎浪带半径, 呼吸相位（半径为 0 表示空槽位）
 
   ${SKY_GLSL}
 
@@ -183,8 +184,22 @@ const fragmentShader = /* glsl */ `
     float foamBase = clamp(vFoam * 1.1 + smoothstep(0.6, 0.92, vHeight) * 0.55, 0.0, 1.0);
     float foam = smoothstep(0.42, 0.72, foamBase + (foamN - 0.5) * 0.45);
     foam *= smoothstep(0.28, 0.5, vHeight);            // 波谷处泡沫渐隐
+
+    // ---- 岛屿浅水碎浪带：碰撞半径附近一圈泡沫，噪声打散 + 随时间呼吸 ----
+    float surf = 0.0;
+    for (int i = 0; i < 4; i++) {
+      float ir = uIslands[i].z;
+      if (ir < 0.1) continue;
+      float rr = ir + sin(uTime * 0.7 + uIslands[i].w) * 1.5; // 呼吸
+      float d = distance(vWorldPos.xz, uIslands[i].xy);
+      surf = max(surf, 1.0 - smoothstep(0.0, 7.0, abs(d - rr)));
+    }
+    float surfN = vnoise(vWorldPos.xz * 1.6 + vec2(uTime * 0.25, -uTime * 0.18));
+    surf *= 0.55 + 0.45 * surfN;
+    foam = max(foam, surf);
+
     foam *= 1.0 - smoothstep(150.0, 320.0, camDist);   // 远处淡出防摩尔纹
-    col = mix(col, uFoamColor, foam * 0.9);
+    col = mix(col, uFoamColor, clamp(foam, 0.0, 1.0) * 0.9);
 
     gl_FragColor = vec4(col, 1.0);
     #include <tonemapping_fragment>
@@ -193,7 +208,7 @@ const fragmentShader = /* glsl */ `
   }
 `;
 
-export function createWater(sunDir) {
+export function createWater(sunDir, islands = []) {
   const geo = new THREE.PlaneGeometry(1000, 1000, 256, 256);
   geo.rotateX(-Math.PI / 2); // 躺平到 xz 平面，position.y 全为 0
 
@@ -215,6 +230,12 @@ export function createWater(sunDir) {
   // merge 之后再把波形数组填进去（数组不便走 merge）
   uniforms.uWaves = { value: WAVES.map((w) => new THREE.Vector4(w.dx, w.dz, w.amp, w.k)) };
   uniforms.uWave2 = { value: WAVES.map((w) => new THREE.Vector4(w.omega, w.q, 0, 0)) };
+  // 岛屿碎浪带：x, z, 半径, 呼吸相位；空槽位半径为 0
+  uniforms.uIslands = {
+    value: [0, 1, 2, 3].map((i) => islands[i]
+      ? new THREE.Vector4(islands[i].x, islands[i].z, islands[i].radius, i * 1.7)
+      : new THREE.Vector4(0, 0, 0, 0)),
+  };
 
   const mat = new THREE.ShaderMaterial({
     vertexShader,

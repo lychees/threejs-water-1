@@ -47,8 +47,8 @@ function wrapProp(root, targetSize, bottomY = 0) {
   return g;
 }
 
-// ---- 岛屿布局（均离出生点 >100m，分布不同方位） ----
-const ISLAND_DEFS = [
+// ---- 岛屿布局（均离出生点 >100m，分布不同方位）；导出供水面碎浪带使用 ----
+export const ISLAND_DEFS = [
   { id: 'coastal_cliff_01', size: 85, pos: [-270, -210], bottom: -14, veg: 14, fort: true },
   { id: 'coast_rocks_01',   size: 60, pos: [300, 180],   bottom: -6,  veg: 8 },
   { id: 'coastal_cliff_01', size: 50, pos: [60, 340],    bottom: -10, veg: 8 },
