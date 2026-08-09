@@ -107,6 +107,7 @@ const weather = new Weather({
 });
 const audio = new GameAudio();
 combat.onSplash = () => audio.splash();
+weather.onLightning = (delay) => audio.thunder(delay); // 闪电 → 延迟雷声
 // 昼夜循环：产出光照/颜色基底，天气在其上乘法调光（loop 里先 daytime 后 weather）
 const dayTime = new DayTime({
   scene, camera,

@@ -55,9 +55,10 @@ export class GameAudio {
     this.oceanFilter.frequency.setTargetAtTime(cutoff, now, 0.25);
   }
 
-  // 短促噪声爆发（炮声/水花/命中的基础件）
-  _noiseBurst(dur, filterType, freq, peak) {
+  // 短促噪声爆发（炮声/水花/命中的基础件）；when = 延迟秒数
+  _noiseBurst(dur, filterType, freq, peak, when = 0) {
     if (!this.ctx) return;
+    const t0 = this.ctx.currentTime + when;
     const len = Math.floor(this.ctx.sampleRate * dur);
     const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = buf.getChannelData(0);
@@ -72,7 +73,7 @@ export class GameAudio {
     src.connect(f);
     f.connect(g);
     g.connect(this.master);
-    src.start();
+    src.start(t0);
   }
 
   _tone(freq, dur, peak, type = 'sine', when = 0) {
@@ -107,6 +108,17 @@ export class GameAudio {
   pickup() {
     this._tone(660, 0.12, 0.3, 'triangle');
     this._tone(880, 0.18, 0.3, 'triangle', 0.1);
+  }
+
+  // 雷声：delay 秒后到（光速先到、声速后到）。近=炸裂脆响+短滚雷，远=低沉长滚雷
+  thunder(delay = 0.5) {
+    const near = delay < 0.8;
+    // 近雷的"劈裂"脆响
+    if (near) this._noiseBurst(0.18, 'highpass', 900, 0.8, delay);
+    // 滚雷主体：长低频噪声，远近音色不同
+    this._noiseBurst(near ? 1.6 : 2.8, 'lowpass', near ? 220 : 130, near ? 1.0 : 0.7, delay + (near ? 0.04 : 0));
+    // 次低频轰感托底
+    this._tone(near ? 48 : 38, near ? 1.2 : 2.2, near ? 0.7 : 0.5, 'sine', delay);
   }
 
   toggleMute() {

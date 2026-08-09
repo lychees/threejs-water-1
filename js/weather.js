@@ -45,10 +45,10 @@ export const PRESETS = {
 
 const PRESET_KEYS = Object.keys(PRESETS);
 const MIN_INTERVAL = 120, MAX_INTERVAL = 240; // 自动切换间隔（2~4 分钟）
-const RAIN_DROPS = 1200;            // 雨线条数（LineSegments）
-const RAIN_AREA = 60;               // 相机周围的降雨范围（米）
+const RAIN_DROPS = 2600;            // 雨线条数（LineSegments）
+const RAIN_AREA = 70;               // 相机周围的降雨范围（米）
 const RAIN_TOP = 28;                // 雨滴生成高度
-const WIND_X = 6;                   // 风暴横向风速（雨倾斜）
+const WIND_X = 9;                   // 风暴横向风速（雨倾斜）
 const MIN_BRIGHTNESS = 0.35;        // 主光+半球光强度下限（防夜晚+风暴黑到看不见）
 const GRAY = new THREE.Color(0x6a7a85); // 阴雨灰化目标色
 
@@ -81,6 +81,7 @@ export class Weather {
     this.params = snapshot(PRESETS.clear);
     this.timer = rand(MIN_INTERVAL, MAX_INTERVAL);
     this.flash = 0;                       // 闪电余晖
+    this.onLightning = null;              // 闪电回调（main.js 接雷声，参数=雷声延迟秒数）
     this.qualityMul = 1;                  // 画质档位的雨密度系数
     this.fogColor = new THREE.Color(0xcfe9f3); // 供水下雾插值做水上面
     this.fogNearV = 90;
@@ -104,6 +105,38 @@ export class Weather {
     this.rain.frustumCulled = false;
     this.rain.visible = false;
     scene.add(this.rain);
+
+    // ---- 闪电：天空中的锯齿状电弧（折线段），随 flash 余晖显隐 ----
+    const BOLT_SEGS = 14;
+    this.boltGeo = new THREE.BufferGeometry();
+    this.boltGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(BOLT_SEGS * 3), 3));
+    this.boltMat = new THREE.LineBasicMaterial({
+      color: 0xdceeff, transparent: true, opacity: 0, fog: false, depthWrite: false,
+    });
+    this.bolt = new THREE.Line(this.boltGeo, this.boltMat);
+    this.bolt.frustumCulled = false;
+    this.bolt.visible = false;
+    scene.add(this.bolt);
+    this._boltSegs = BOLT_SEGS;
+  }
+
+  // 生成一道新闪电：相机周围随机方位，从高空锯齿落到海面
+  _strikeBolt() {
+    const az = Math.random() * Math.PI * 2;
+    const dist = rand(180, 420);
+    const bx = this.camera.position.x + Math.sin(az) * dist;
+    const bz = this.camera.position.z + Math.cos(az) * dist;
+    const topY = rand(90, 140);
+    const pos = this.boltGeo.attributes.position;
+    let x = bx, z = bz;
+    for (let i = 0; i < this._boltSegs; i++) {
+      const t = i / (this._boltSegs - 1);
+      const y = topY * (1 - t);
+      pos.setXYZ(i, x, y, z);
+      x += rand(-14, 14) * (1 - t * 0.5); // 越往下摆动越小
+      z += rand(-14, 14) * (1 - t * 0.5);
+    }
+    pos.needsUpdate = true;
   }
 
   // ---- 对外接口 ----
@@ -163,20 +196,37 @@ export class Weather {
     this.fogColor.lerpColors(day.horizon, GRAY, p.grayT * 0.8);
     this.fogNearV = day.fogNear * p.fogMul;
     this.fogFarV = day.fogFar * p.fogMul;
-    // 曝光随时间基底微调（阴雨略压）
-    this.renderer.toneMappingExposure = day.exposure * (1 - p.grayT * 0.08);
+    // 曝光随时间基底微调（阴雨略压；闪电瞬间抬曝光增强"照亮全场"感）
+    this.renderer.toneMappingExposure = day.exposure * (1 - p.grayT * 0.08) + this.flash * 0.35;
 
-    // 光照：乘法叠加，主光+半球光不低于下限；闪电只加在半球光上
-    this.sun.intensity = day.light * p.lightMul;
-    if (p.rain > 0.7 && Math.random() < dt * 0.12) this.flash = 1;
-    this.flash *= Math.exp(-dt * 5);
+    // 光照：乘法叠加，主光+半球光不低于下限；闪电同时打亮半球光和主光
+    this.sun.intensity = day.light * p.lightMul + this.flash * 3.0;
+    if (p.rain > 0.7 && Math.random() < dt * 0.22) {
+      this.flash = 1;
+      this._strikeBolt();
+      // 雷声延迟 = 模拟距离（近则炸雷，远则闷雷 2s 后到）
+      if (this.onLightning) this.onLightning(rand(0.2, 2.2));
+      // 30% 概率 0.12s 后二次回击（双闪）
+      if (Math.random() < 0.3) this._restrike = 0.12;
+    }
+    if (this._restrike !== undefined) {
+      this._restrike -= dt;
+      if (this._restrike <= 0) {
+        this._restrike = undefined;
+        this.flash = 1;
+        this._strikeBolt();
+      }
+    }
+    this.flash *= Math.exp(-dt * 4.5);
+    this.bolt.visible = this.flash > 0.12;
+    this.boltMat.opacity = Math.min(1, this.flash * 1.6);
     let hemiI = day.hemi * p.lightMul;
     if (this.sun.intensity + hemiI < MIN_BRIGHTNESS) hemiI = MIN_BRIGHTNESS - this.sun.intensity;
-    this.hemi.intensity = hemiI + this.flash * 2.5;
+    this.hemi.intensity = hemiI + this.flash * 4.0;
 
     // ---- 雨（密度 = 预设密度 × 画质密度） ----
     this.rain.visible = p.rain > 0.03;
-    this.rainMat.opacity = p.rain * 0.55;
+    this.rainMat.opacity = p.rain * 0.8;
     this.rainGeo.setDrawRange(0, Math.floor(RAIN_DROPS * p.rainDensity * this.qualityMul) * 2);
     if (this.rain.visible) {
       this.rain.position.copy(this.camera.position);
@@ -184,7 +234,7 @@ export class Weather {
       const wx = WIND_X * p.rain;
       for (let i = 0; i < this.drops.length; i++) {
         const d = this.drops[i];
-        d.y -= d.speed * dt;
+        d.y -= d.speed * 1.5 * dt;   // 雨速整体加快
         d.x += wx * dt;
         if (d.y < 0) {
           d.y = RAIN_TOP;
@@ -193,7 +243,7 @@ export class Weather {
         }
         if (d.x > RAIN_AREA / 2) d.x -= RAIN_AREA;
         pos.setXYZ(i * 2, d.x, d.y, d.z);
-        pos.setXYZ(i * 2 + 1, d.x - wx * 0.04, d.y + 0.7, d.z);
+        pos.setXYZ(i * 2 + 1, d.x - wx * 0.06, d.y + 1.1, d.z); // 雨丝更长
       }
       pos.needsUpdate = true;
     }
