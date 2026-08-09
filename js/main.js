@@ -2,11 +2,11 @@
 import * as THREE from 'three';
 import { createWater, getWaveHeight } from './water.js';
 import { createSky, SUN_DIR } from './sky.js';
-import { Ship, buildShipModel } from './ship.js';
+import { Ship } from './ship.js';
 import { Combat } from './combat.js';
 import { EnemyFleet } from './enemy.js';
 import { loadShipModel, instantiateShip, SHIP_MODELS, BASE_LENGTH } from './modelship.js';
-import { SHIP_DEFS, buildShip, computeStats, FALLBACK_STATS, renderShipThumbnail, DEFAULT_SHIP_DEF_ID } from './shipyard.js';
+import { SHIP_DEFS, buildShip, buildFigurehead, computeStats, FALLBACK_STATS, renderShipThumbnail, DEFAULT_SHIP_DEF_ID } from './shipyard.js';
 import { createWorld } from './world.js';
 
 // ===== 渲染器 / 场景 / 相机 =====
@@ -74,6 +74,16 @@ async function loadShipStats() {
   }
 }
 
+// ===== 船只定制状态（sessionStorage 恢复） =====
+const KEY_FANCY = 'waters-fancy';               // '1' = 使用精致模型
+const KEY_SAIL_COLOR = 'waters-sail-color';     // 船帆染色（null = 原色）
+const KEY_HULL_COLOR = 'waters-hull-color';     // 船体染色
+const KEY_FIGUREHEAD = 'waters-figurehead';     // none / dragon / skull / dolphin
+let fancyModel = sessionStorage.getItem(KEY_FANCY) === '1';
+let sailColor = sessionStorage.getItem(KEY_SAIL_COLOR) || null;
+let hullColor = sessionStorage.getItem(KEY_HULL_COLOR) || null;
+let figurehead = sessionStorage.getItem(KEY_FIGUREHEAD) || 'none';
+
 function applyShipChoice(id) {
   const def = SHIP_DEFS.find((d) => d.id === id);
   if (!def) return;
@@ -84,30 +94,46 @@ function applyShipChoice(id) {
   player.turnRate = stats.turnRate;
   player.cannons = stats.cannons;
   const tok = ++choiceToken;
+  const useModel = fancyModel && def.model; // 默认一律低模，勾选且有精致模型才加载
 
-  if (def.model) {
-    // 真实模型：异步加载，失败回退程序化船
+  // 挂船首像（船头 +Z 端水线上方，按船长比例）并应用外观
+  const finish = (group, sailSetter, shipLength) => {
+    if (figurehead !== 'none') {
+      const fh = buildFigurehead(figurehead);
+      const s = shipLength / BASE_LENGTH;
+      fh.scale.setScalar(s);
+      fh.position.set(0, 1.05 * s, shipLength * 0.46);
+      group.add(fh);
+    }
+    player.setVisual(group, sailSetter);
+    player.setSailAmount(sailLevel / 3);
+  };
+
+  if (useModel) {
+    // 精致模型：异步加载；染色走材质 clone 乘色，不污染共享模板
     const mdef = SHIP_MODELS[def.model];
     player.lengthScale = mdef.targetLength / BASE_LENGTH;
     player.hitRadius = 3.4 * player.lengthScale;
+    const tint = {};
+    if (hullColor) tint.hull = hullColor;
+    if (sailColor) tint.sail = sailColor;
     loadShipModel(def.model).then((template) => {
       if (tok !== choiceToken) return;
       if (!template) {
-        const m = buildShipModel({ hullColor: 0x7a4f2a, sailColor: 0xf3ead5 });
-        player.setVisual(m.group, m.setSailAmount);
+        // 失败回退本船的低模版本
+        const v = buildShip(def.spec, { sailColor, hullColor });
+        finish(v.group, v.setSailAmount, def.spec.length);
       } else {
-        const v = instantiateShip(template, null);
-        player.setVisual(v.group, v.setSailAmount);
+        const v = instantiateShip(template, Object.keys(tint).length ? tint : null);
+        finish(v.group, v.setSailAmount, mdef.targetLength);
       }
-      player.setSailAmount(sailLevel / 3);
     });
   } else {
-    // 参数化程序化船：同步生成
+    // 参数化程序化船：同步生成（染色直接进材质缓存 key）
     player.lengthScale = def.spec.length / BASE_LENGTH;
     player.hitRadius = 3.4 * player.lengthScale;
-    const v = buildShip(def.spec);
-    player.setVisual(v.group, v.setSailAmount);
-    player.setSailAmount(sailLevel / 3);
+    const v = buildShip(def.spec, { sailColor, hullColor });
+    finish(v.group, v.setSailAmount, def.spec.length);
   }
 }
 
@@ -119,11 +145,13 @@ function statBar(label, ratio) {
 
 function buildShipCards() {
   const wrap = $('ship-select');
+  wrap.innerHTML = ''; // 支持重建（切换精致模型勾选时）
   for (const def of SHIP_DEFS) {
     const stats = SHIP_STATS[def.id] || FALLBACK_STATS;
-    // 缩略图：真实模型用预制 thumb.png；程序化船离屏渲染一帧
+    const useModel = fancyModel && def.model;
+    // 缩略图：勾选精致模型才用真实模型（预制 thumb 或加载后实拍）；否则程序化低模实拍
     let thumb;
-    if (def.model) {
+    if (useModel) {
       thumb = SHIP_MODELS[def.model].thumb;
     } else {
       const t = buildShip(def.spec);
@@ -135,7 +163,7 @@ function buildShipCards() {
     card.dataset.ship = def.id;
     card.innerHTML =
       (thumb ? `<img src="${thumb}" alt="${def.cn}">` : `<div class="thumb-fallback">${def.cn}</div>`) +
-      (def.model ? '<span class="badge">★精致模型</span>' : '') +
+      (useModel ? '<span class="badge">★精致模型</span>' : '') +
       `<h3>${def.cn}</h3>` +
       `<div class="en-name">${def.en}</div>` +
       statBar('血', stats.hp / 170) +
@@ -151,8 +179,8 @@ function buildShipCards() {
     });
     wrap.appendChild(card);
 
-    // 无预制缩略图的真实模型：按需加载完成后用同一离屏管线实拍一张补上
-    if (def.model && !thumb) {
+    // 无预制缩略图的精致模型：勾选状态下按需加载，完成后用同一离屏管线实拍一张补上
+    if (useModel && !thumb) {
       loadShipModel(def.model).then((template) => {
         if (!template) return;
         const url = renderShipThumbnail(template, { dispose: false }); // 模板几何体共享，不可销毁
@@ -167,6 +195,44 @@ function buildShipCards() {
       });
     }
   }
+}
+
+// ===== 定制 UI（精致模型勾选 / 染色 / 船首像） =====
+function initCustomizeUI() {
+  const fancyChk = $('fancy-model');
+  fancyChk.checked = fancyModel;
+  fancyChk.addEventListener('change', () => {
+    fancyModel = fancyChk.checked;
+    sessionStorage.setItem(KEY_FANCY, fancyModel ? '1' : '0');
+    buildShipCards(); // 缩略图随低模/精致切换重渲染
+    applyShipChoice(selectedShipId);
+  });
+
+  const sailInput = $('sail-color');
+  sailInput.value = sailColor || '#f3ead5';
+  sailInput.addEventListener('input', () => {
+    sailColor = sailInput.value;
+    sessionStorage.setItem(KEY_SAIL_COLOR, sailColor);
+    applyShipChoice(selectedShipId);
+  });
+
+  const hullInput = $('hull-color');
+  hullInput.value = hullColor || '#7a4f2a';
+  hullInput.addEventListener('input', () => {
+    hullColor = hullInput.value;
+    sessionStorage.setItem(KEY_HULL_COLOR, hullColor);
+    applyShipChoice(selectedShipId);
+  });
+
+  document.querySelectorAll('.fh-btn').forEach((b) => {
+    b.classList.toggle('selected', b.dataset.fh === figurehead);
+    b.addEventListener('click', () => {
+      figurehead = b.dataset.fh;
+      sessionStorage.setItem(KEY_FIGUREHEAD, figurehead);
+      document.querySelectorAll('.fh-btn').forEach((x) => x.classList.toggle('selected', x === b));
+      applyShipChoice(selectedShipId);
+    });
+  });
 }
 
 // ===== 游戏状态 =====
@@ -197,6 +263,7 @@ function updateHUD() {
 // 初始化选船界面并应用上次选择（需在 $ / sailLevel 声明之后调用）
 loadShipStats().then(() => {
   buildShipCards();
+  initCustomizeUI();
   applyShipChoice(selectedShipId);
 });
 

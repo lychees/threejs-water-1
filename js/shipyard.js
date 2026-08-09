@@ -159,11 +159,14 @@ function buildHull(spec) {
 // ================= 生成器入口 =================
 /**
  * @param {object} spec 见文件底部 25 船配置
+ * @param {object} opts { sailColor, hullColor } 玩家定制染色（null = 用 spec 原色）
  * @returns {{ group: THREE.Group, setSailAmount: Function }}
  */
-export function buildShip(spec) {
+export function buildShip(spec, opts = {}) {
+  const { sailColor = null, hullColor = null } = opts;
+  const effSpec = hullColor ? { ...spec, hull: hullColor } : spec;
   const group = new THREE.Group();
-  group.add(buildHull(spec));
+  group.add(buildHull(effSpec));
 
   const sails = [];
   const deckY = spec.boxy ? spec.depth * 0.72 : spec.depth * 0.78;
@@ -177,7 +180,8 @@ export function buildShip(spec) {
     group.add(mast);
 
     if (m.sail && m.sail.type !== 'none') {
-      const sailG = buildSail(m.sail);
+      const sailSpec = sailColor ? { ...m.sail, color: sailColor } : m.sail;
+      const sailG = buildSail(sailSpec);
       sailG.position.set(0, deckY + m.h * 0.95, mastZ + 0.05);
       group.add(sailG);
       sails.push(sailG.userData.sail);
@@ -192,6 +196,73 @@ export function buildShip(spec) {
   setSailAmount(1);
 
   return { group, setSailAmount };
+}
+
+// ================= 船首像（低模 <200 三角面，共享材质缓存） =================
+// kind: 'dragon' 海龙 / 'skull' 骷髅 / 'dolphin' 海豚；朝 +Z（船头方向）
+export function buildFigurehead(kind) {
+  const g = new THREE.Group();
+
+  if (kind === 'dragon') {
+    const body = hullMat(0x2e8f7a);
+    const fin = hullMat(0xd4b04a);
+    // 三段渐弯的颈（逐节前倾）
+    const segs = [
+      { y: 0.15, z: 0.00, r: 0.5, len: 0.45, r1: 0.12, r2: 0.10 },
+      { y: 0.42, z: 0.18, r: 0.9, len: 0.42, r1: 0.10, r2: 0.08 },
+      { y: 0.62, z: 0.42, r: 1.2, len: 0.38, r1: 0.08, r2: 0.06 },
+    ];
+    for (const s of segs) {
+      const seg = new THREE.Mesh(new THREE.CylinderGeometry(s.r2, s.r1, s.len, 6), body);
+      seg.position.set(0, s.y, s.z);
+      seg.rotation.x = s.r;
+      g.add(seg);
+    }
+    // 头锥 + 两侧鳍
+    const head = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.42, 6), body);
+    head.rotation.x = Math.PI / 2;
+    head.position.set(0, 0.68, 0.66);
+    g.add(head);
+    for (const side of [-1, 1]) {
+      const f = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.3, 4), fin);
+      f.position.set(side * 0.14, 0.55, 0.35);
+      f.rotation.z = -side * 1.2;
+      g.add(f);
+    }
+  } else if (kind === 'skull') {
+    const bone = hullMat(0xe8e2d4);
+    const dark = hullMat(0x1a1a1a);
+    const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), bone);
+    cranium.position.y = 0.35;
+    g.add(cranium);
+    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.12, 0.22), bone);
+    jaw.position.set(0, 0.14, 0.06);
+    g.add(jaw);
+    for (const side of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 5), dark);
+      eye.position.set(side * 0.09, 0.38, 0.17);
+      g.add(eye);
+    }
+  } else if (kind === 'dolphin') {
+    const skin = hullMat(0x5a8fb5);
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), skin);
+    body.scale.set(0.55, 0.5, 1.6); // 纺锤体
+    body.position.y = 0.25;
+    g.add(body);
+    const rostrum = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.06, 0.35, 6), skin);
+    rostrum.rotation.x = Math.PI / 2;
+    rostrum.position.set(0, 0.22, 0.58);
+    g.add(rostrum);
+    const dorsal = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.25, 4), skin);
+    dorsal.position.set(0, 0.52, -0.05);
+    dorsal.rotation.x = -0.3;
+    g.add(dorsal);
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 4), skin);
+    tail.rotation.x = -Math.PI / 2;
+    tail.position.set(0, 0.28, -0.55);
+    g.add(tail);
+  }
+  return g;
 }
 
 // ================= 缩略图：共享离屏 renderer，渲染一帧转 dataURL =================
@@ -266,17 +337,17 @@ export const SHIP_DEFS = [
   { id: 7, en: 'Caravela Redonda', cn: '圆帆卡拉维尔', spec: { length: 8, beam: 2.2, depth: 1.1, hull: 0x7a4f2a, masts: [{ z: 0.18, h: 7, sail: SQ(4.0, 4.2) }, { z: -0.24, h: 6, sail: LAT(2.8, 4.0) }] } },
   { id: 8, en: 'Brigantine', cn: '双桅横帆船', spec: { length: 9, beam: 2.3, depth: 1.2, hull: 0x74502e, masts: [{ z: 0.18, h: 7.5, sail: SQ(4.4, 4.6) }, { z: -0.22, h: 6.5, sail: SQ(3.6, 3.8) }] } },
   { id: 9, en: 'Nao', cn: '纳奥船', spec: { length: 10, beam: 3.1, depth: 1.5, hull: 0x7a4f2a, sternCastle: 0.7, masts: [{ z: 0.28, h: 7.5, sail: SQ(4.6, 4.4) }, { z: 0, h: 8.5, sail: SQ(5.0, 5.0) }, { z: -0.28, h: 6, sail: LAT(2.6, 3.6) }] } },
-  { id: 10, en: 'Carrack', cn: '卡拉克帆船', model: 'dutch_ship_medium' },
-  { id: 11, en: 'Galleon', cn: '盖伦帆船', model: 'dutch_ship_large_01' },
+  { id: 10, en: 'Carrack', cn: '卡拉克帆船', model: 'dutch_ship_medium', spec: { length: 11, beam: 3.0, depth: 1.5, hull: 0x7a4f2a, sternCastle: 1.2, bowCastle: 0.9, masts: [{ z: 0.34, h: 7.5, sail: SQ(4.4, 4.2) }, { z: 0.1, h: 9, sail: SQ(5.0, 5.2) }, { z: -0.14, h: 8, sail: SQ(4.4, 4.6) }, { z: -0.36, h: 6, sail: LAT(2.6, 3.6) }] } },
+  { id: 11, en: 'Galleon', cn: '盖伦帆船', model: 'dutch_ship_large_01', spec: { length: 12.5, beam: 2.6, depth: 1.4, hull: 0x6a4527, sternCastle: 0.9, stripe: 0x2b2b2b, masts: [{ z: 0.3, h: 8, sail: SQ(4.6, 4.6) }, { z: 0, h: 9.5, sail: SQ(5.2, 5.4) }, { z: -0.3, h: 7, sail: SQ(3.8, 3.8) }] } },
   { id: 12, en: 'Xebec', cn: '谢贝克船', spec: { length: 11, beam: 2.0, depth: 1.1, hull: 0x8a5f36, bowUp: 0.3, masts: [{ z: 0.28, h: 7.5, sail: LAT(3.2, 4.6) }, { z: 0, h: 8, sail: LAT(3.6, 5.2) }, { z: -0.28, h: 6.5, sail: LAT(2.8, 4.0) }] } },
-  { id: 13, en: 'Pinnace', cn: '纵帆快船', model: 'ship_pinnace' },
-  { id: 14, en: 'Sloop', cn: '单桅帆船', model: 'quaternius_ship_small' },
-  { id: 15, en: 'Frigate', cn: '巡航护卫舰', model: 'quaternius_ship_large' },
+  { id: 13, en: 'Pinnace', cn: '纵帆快船', model: 'ship_pinnace', spec: { length: 7.5, beam: 2.0, depth: 1.0, hull: 0x845632, masts: [{ z: 0.16, h: 6.5, sail: GAF(3.2, 3.8) }, { z: -0.2, h: 5.5, sail: GAF(2.6, 3.0) }] } },
+  { id: 14, en: 'Sloop', cn: '单桅帆船', model: 'quaternius_ship_small', spec: { length: 7, beam: 2.0, depth: 1.0, hull: 0x845632, masts: [{ z: 0.1, h: 7, sail: GAF(3.6, 4.4) }] } },
+  { id: 15, en: 'Frigate', cn: '巡航护卫舰', model: 'quaternius_ship_large', spec: { length: 12, beam: 2.4, depth: 1.3, hull: 0x5a4632, stripe: 0x22201e, masts: [{ z: 0.3, h: 8, sail: SQ(4.6, 4.6) }, { z: 0.02, h: 9, sail: SQ(5.0, 5.2) }, { z: -0.28, h: 7, sail: SQ(3.6, 3.6) }] } },
   { id: 16, en: 'Barge', cn: '大型驳船', spec: { length: 12, beam: 4.2, depth: 1.1, hull: 0x6a5136, boxy: true, masts: [{ z: 0.28, h: 7, sail: SQ(5.0, 4.0) }, { z: 0, h: 7.5, sail: SQ(5.2, 4.2) }, { z: -0.28, h: 6.5, sail: SQ(4.4, 3.6) }] } },
   { id: 17, en: 'Full-rigged Ship', cn: '全帆装船', spec: { length: 14, beam: 3.0, depth: 1.5, hull: 0x5f4028, sternCastle: 0.8, stripe: 0x2b2b2b, masts: [{ z: 0.36, h: 8, sail: SQ(4.6, 4.4) }, { z: 0.12, h: 9.5, sail: SQ(5.2, 5.4) }, { z: -0.12, h: 9, sail: SQ(4.8, 5.0) }, { z: -0.36, h: 7, sail: SQ(3.6, 3.4) }] } },
   { id: 18, en: 'Junk', cn: '中式戎克船', spec: { length: 10, beam: 3.2, depth: 1.4, hull: 0x7a3f28, sternCastle: 1.0, masts: [{ z: 0.16, h: 8, sail: LUG(4.6, 5.2) }, { z: -0.22, h: 7, sail: LUG(3.8, 4.2) }] } },
   { id: 19, en: 'Light Galley', cn: '轻型桨帆船', spec: { length: 9, beam: 1.8, depth: 1.0, hull: 0x8a5f36, oars: 6, masts: [{ z: 0.05, h: 7, sail: LAT(3.4, 4.8) }] } },
-  { id: 20, en: 'Flemish Galleon', cn: '佛兰德盖伦', model: 'dutch_ship_large_02' },
+  { id: 20, en: 'Flemish Galleon', cn: '佛兰德盖伦', model: 'dutch_ship_large_02', spec: { length: 12, beam: 3.4, depth: 1.5, hull: 0x74502e, sternCastle: 0.7, masts: [{ z: 0.3, h: 7.5, sail: SQ(5.0, 4.4) }, { z: 0, h: 8.5, sail: SQ(5.4, 5.0) }, { z: -0.3, h: 6.5, sail: SQ(4.2, 3.6) }] } },
   { id: 21, en: 'Venetian Galeass', cn: '威尼斯加莱赛船', spec: { length: 13, beam: 2.8, depth: 1.4, hull: 0x6f4a2c, oars: 8, masts: [{ z: 0.28, h: 8, sail: LAT(3.6, 5.0) }, { z: 0, h: 8.5, sail: LAT(4.0, 5.6) }, { z: -0.28, h: 7, sail: LAT(3.0, 4.2) }] } },
   { id: 22, en: 'La Reale', cn: '皇家桨帆船', spec: { length: 11, beam: 2.2, depth: 1.1, hull: 0x8e2f28, oars: 10, masts: [{ z: 0.18, h: 7.5, sail: LAT(3.4, 4.8) }, { z: -0.2, h: 6.5, sail: LAT(2.8, 4.0) }] } },
   { id: 23, en: 'Tekkousen', cn: '铁甲船', spec: { length: 12, beam: 3.4, depth: 1.5, hull: 0x2e3136, boxy: true, sternCastle: 0.6, masts: [{ z: 0, h: 8, sail: LUG(4.8, 5.0, 0x8a8078) }] } },

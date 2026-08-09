@@ -59,6 +59,15 @@
   .stat-row .lbl { width: 18px; text-align: center; opacity: .85; }
   .stat-row .sbar { flex: 1; height: 6px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.2); border-radius: 3px; overflow: hidden; }
   .stat-row .sbar > div { height: 100%; background: #e8a33d; }
+
+  /* ===== 定制工具栏（精致模型勾选 / 染色 / 船首像） ===== */
+  #customize-bar { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 16px; margin-top: 16px; background: rgba(0, 20, 35, .45); border: 1px solid rgba(255,255,255,.2); border-radius: 12px; padding: 10px 18px; font-size: 13.5px; }
+  #customize-bar .opt { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  #customize-bar input[type="color"] { width: 34px; height: 22px; border: 1px solid rgba(255,255,255,.35); border-radius: 5px; background: none; padding: 0; cursor: pointer; }
+  #customize-bar input[type="checkbox"] { accent-color: #e8a33d; width: 15px; height: 15px; cursor: pointer; }
+  .fh-btn { background: rgba(0,0,0,.4); color: #fff; border: 1.5px solid rgba(255,255,255,.3); border-radius: 14px; padding: 3px 12px; font-size: 12.5px; cursor: pointer; }
+  .fh-btn:hover { border-color: rgba(232,163,61,.6); }
+  .fh-btn.selected { border-color: #e8a33d; background: rgba(232,163,61,.25); }
 </style>
 <script type="importmap">
 {
@@ -100,6 +109,16 @@
   <p>鼠标左键 / Q —— 左舷齐射　　鼠标右键 / E —— 右舷齐射</p>
   <p>把敌船引到舷侧再开火，击沉它们！</p>
   <div id="ship-select"></div>
+  <div id="customize-bar">
+    <label class="opt"><input type="checkbox" id="fancy-model"> 使用精致模型（加载更慢）</label>
+    <label class="opt">船帆色 <input type="color" id="sail-color" value="#f3ead5"></label>
+    <label class="opt">船体色 <input type="color" id="hull-color" value="#7a4f2a"></label>
+    <span class="opt">船首像</span>
+    <button class="fh-btn" data-fh="none">无</button>
+    <button class="fh-btn" data-fh="dragon">海龙</button>
+    <button class="fh-btn" data-fh="skull">骷髅</button>
+    <button class="fh-btn" data-fh="dolphin">海豚</button>
+  </div>
   <button id="start-btn">出 航</button>
 </div>
 
