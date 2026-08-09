@@ -44,14 +44,17 @@
     100% { opacity: 0; transform: translateX(-50%) translateY(-70px); }
   }
 
-  /* ===== 选船卡片 ===== */
-  #ship-select { display: flex; gap: 14px; margin-top: 24px; }
-  .ship-card { width: 168px; background: rgba(0, 20, 35, .55); border: 2px solid rgba(255,255,255,.2); border-radius: 12px; padding: 10px; cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s; }
+  /* ===== 选船卡片（可滚动网格） ===== */
+  #start-overlay { justify-content: flex-start; overflow-y: auto; padding: 5vh 16px; }
+  #ship-select { display: grid; grid-template-columns: repeat(5, 168px); gap: 12px; margin-top: 22px; max-height: 52vh; overflow-y: auto; padding: 6px; }
+  .ship-card { position: relative; background: rgba(0, 20, 35, .55); border: 2px solid rgba(255,255,255,.2); border-radius: 12px; padding: 10px; cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s; }
   .ship-card:hover { transform: translateY(-3px); border-color: rgba(232,163,61,.6); }
   .ship-card.selected { border-color: #e8a33d; box-shadow: 0 0 14px rgba(232,163,61,.45); }
   .ship-card img { width: 100%; border-radius: 8px; display: block; background: rgba(255,255,255,.06); }
-  .ship-card h3 { margin: 8px 0 4px; font-size: 15px; letter-spacing: 2px; font-weight: bold; }
-  .ship-card .desc { font-size: 11.5px; opacity: .8; min-height: 30px; line-height: 1.4; }
+  .ship-card .thumb-fallback { width: 100%; aspect-ratio: 2; border-radius: 8px; background: rgba(255,255,255,.08); display: flex; align-items: center; justify-content: center; font-size: 14px; opacity: .7; }
+  .ship-card .badge { position: absolute; top: 14px; left: 14px; background: #e8a33d; color: #3a2405; font-size: 10px; font-weight: bold; padding: 2px 7px; border-radius: 8px; }
+  .ship-card h3 { margin: 8px 0 2px; font-size: 15px; letter-spacing: 2px; font-weight: bold; }
+  .ship-card .en-name { font-size: 10.5px; opacity: .6; margin-bottom: 6px; letter-spacing: .5px; }
   .stat-row { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 3px; }
   .stat-row .lbl { width: 18px; text-align: center; opacity: .85; }
   .stat-row .sbar { flex: 1; height: 6px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.2); border-radius: 3px; overflow: hidden; }

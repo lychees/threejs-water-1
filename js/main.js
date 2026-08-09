@@ -5,7 +5,8 @@ import { createSky, SUN_DIR } from './sky.js';
 import { Ship, buildShipModel } from './ship.js';
 import { Combat } from './combat.js';
 import { EnemyFleet } from './enemy.js';
-import { loadShipModel, instantiateShip, SHIP_MODELS, DEFAULT_SHIP_ID, BASE_LENGTH } from './modelship.js';
+import { loadShipModel, instantiateShip, SHIP_MODELS, BASE_LENGTH } from './modelship.js';
+import { SHIP_DEFS, buildShip, computeStats, FALLBACK_STATS, renderShipThumbnail, DEFAULT_SHIP_DEF_ID } from './shipyard.js';
 import { createWorld } from './world.js';
 
 // ===== 渲染器 / 场景 / 相机 =====
@@ -48,60 +49,105 @@ const fleet = new EnemyFleet(scene, combat);
 let world = null;
 createWorld(scene, getWaveHeight).then((w) => { world = w; });
 
-// ===== 玩家选船：读 sessionStorage 恢复上次选择，按需加载选中的模型 =====
+// ===== 玩家选船：大航海时代2 全 25 种，fetch ships.json 数据驱动属性 =====
 const STORAGE_KEY = 'waters-ship';
-let selectedShipId = sessionStorage.getItem(STORAGE_KEY) || DEFAULT_SHIP_ID;
-if (!SHIP_MODELS[selectedShipId]) selectedShipId = DEFAULT_SHIP_ID;
+// 旧版存档键值（模型 id）-> 新船 id 的兼容映射
+const LEGACY_IDS = { dutch_ship_medium: 10, dutch_ship_large_01: 11, dutch_ship_large_02: 20, ship_pinnace: 13 };
+const SHIP_STATS = {}; // id -> { hp, maxSpeed, turnRate, cannons }
+
+const storedShip = sessionStorage.getItem(STORAGE_KEY);
+let selectedShipId = LEGACY_IDS[storedShip] ?? parseInt(storedShip, 10);
+if (!SHIP_DEFS.some((d) => d.id === selectedShipId)) selectedShipId = DEFAULT_SHIP_DEF_ID;
 let choiceToken = 0; // 防止快速切换时旧请求后到账覆盖新选择
 
-function applyShipChoice(id) {
-  const def = SHIP_MODELS[id];
-  // 属性差异
-  player.maxHp = def.stats.hp;
-  player.hp = def.stats.hp;
-  player.maxSpeed = def.stats.maxSpeed;
-  player.turnRate = def.stats.turnRate;
-  player.cannons = def.stats.cannons;
-  player.lengthScale = def.targetLength / BASE_LENGTH;
-  player.hitRadius = 3.4 * player.lengthScale;
-  // 异步换装；失败回退程序化船
-  const tok = ++choiceToken;
-  loadShipModel(id).then((template) => {
-    if (tok !== choiceToken) return;
-    if (!template) {
-      const m = buildShipModel({ hullColor: 0x7a4f2a, sailColor: 0xf3ead5 });
-      player.setVisual(m.group, m.setSailAmount);
-    } else {
-      const v = instantiateShip(template, null);
-      player.setVisual(v.group, v.setSailAmount);
-    }
-    player.setSailAmount(sailLevel / 3);
-  });
+async function loadShipStats() {
+  let data = null;
+  try {
+    const res = await fetch('assets/ships.json');
+    data = await res.json();
+  } catch (e) {
+    console.warn('[ships] assets/ships.json 加载失败，全部使用基准属性：', e);
+  }
+  for (const def of SHIP_DEFS) {
+    const raw = data && data[String(def.id)];
+    SHIP_STATS[def.id] = raw ? computeStats(raw) : { ...FALLBACK_STATS };
+  }
 }
 
-// ===== 选船卡片 UI（开始遮罩内） =====
+function applyShipChoice(id) {
+  const def = SHIP_DEFS.find((d) => d.id === id);
+  if (!def) return;
+  const stats = SHIP_STATS[id] || FALLBACK_STATS;
+  player.maxHp = stats.hp;
+  player.hp = stats.hp;
+  player.maxSpeed = stats.maxSpeed;
+  player.turnRate = stats.turnRate;
+  player.cannons = stats.cannons;
+  const tok = ++choiceToken;
+
+  if (def.model) {
+    // 真实模型：异步加载，失败回退程序化船
+    const mdef = SHIP_MODELS[def.model];
+    player.lengthScale = mdef.targetLength / BASE_LENGTH;
+    player.hitRadius = 3.4 * player.lengthScale;
+    loadShipModel(def.model).then((template) => {
+      if (tok !== choiceToken) return;
+      if (!template) {
+        const m = buildShipModel({ hullColor: 0x7a4f2a, sailColor: 0xf3ead5 });
+        player.setVisual(m.group, m.setSailAmount);
+      } else {
+        const v = instantiateShip(template, null);
+        player.setVisual(v.group, v.setSailAmount);
+      }
+      player.setSailAmount(sailLevel / 3);
+    });
+  } else {
+    // 参数化程序化船：同步生成
+    player.lengthScale = def.spec.length / BASE_LENGTH;
+    player.hitRadius = 3.4 * player.lengthScale;
+    const v = buildShip(def.spec);
+    player.setVisual(v.group, v.setSailAmount);
+    player.setSailAmount(sailLevel / 3);
+  }
+}
+
+// ===== 选船卡片 UI（开始遮罩内，可滚动网格） =====
 function statBar(label, ratio) {
   return `<div class="stat-row"><span class="lbl">${label}</span>` +
-    `<span class="sbar"><div style="width:${Math.round(ratio * 100)}%"></div></span></div>`;
+    `<span class="sbar"><div style="width:${Math.round(Math.min(1, ratio) * 100)}%"></div></span></div>`;
 }
 
 function buildShipCards() {
   const wrap = $('ship-select');
-  for (const [id, def] of Object.entries(SHIP_MODELS)) {
+  for (const def of SHIP_DEFS) {
+    const stats = SHIP_STATS[def.id] || FALLBACK_STATS;
+    // 缩略图：真实模型用预制 thumb.png；程序化船离屏渲染一帧
+    let thumb;
+    if (def.model) {
+      thumb = SHIP_MODELS[def.model].thumb;
+    } else {
+      const t = buildShip(def.spec);
+      thumb = renderShipThumbnail(t.group);
+    }
+
     const card = document.createElement('div');
-    card.className = 'ship-card' + (id === selectedShipId ? ' selected' : '');
-    card.dataset.ship = id;
+    card.className = 'ship-card' + (def.id === selectedShipId ? ' selected' : '');
+    card.dataset.ship = def.id;
     card.innerHTML =
-      `<img src="${def.thumb}" alt="${def.name}">` +
-      `<h3>${def.name}</h3>` +
-      `<div class="desc">${def.desc}</div>` +
-      statBar('血', def.bars.hp) + statBar('速', def.bars.speed) + statBar('炮', def.bars.cannons);
+      (thumb ? `<img src="${thumb}" alt="${def.cn}">` : `<div class="thumb-fallback">${def.cn}</div>`) +
+      (def.model ? '<span class="badge">★精致模型</span>' : '') +
+      `<h3>${def.cn}</h3>` +
+      `<div class="en-name">${def.en}</div>` +
+      statBar('血', stats.hp / 170) +
+      statBar('速', stats.maxSpeed / 21) +
+      statBar('舵', stats.turnRate / 1.5) +
+      statBar('炮', stats.cannons / 6);
     card.addEventListener('click', () => {
-      selectedShipId = id;
-      sessionStorage.setItem(STORAGE_KEY, id);
+      selectedShipId = def.id;
+      sessionStorage.setItem(STORAGE_KEY, String(def.id));
       wrap.querySelectorAll('.ship-card').forEach((c) =>
-        c.classList.toggle('selected', c.dataset.ship === id));
-      applyShipChoice(id);
+        c.classList.toggle('selected', Number(c.dataset.ship) === def.id));
+      applyShipChoice(def.id);
     });
     wrap.appendChild(card);
   }
@@ -133,8 +179,10 @@ function updateHUD() {
 }
 
 // 初始化选船界面并应用上次选择（需在 $ / sailLevel 声明之后调用）
-buildShipCards();
-applyShipChoice(selectedShipId);
+loadShipStats().then(() => {
+  buildShipCards();
+  applyShipChoice(selectedShipId);
+});
 
 // ===== 拾取飘字 =====
 function floatText(msg) {
