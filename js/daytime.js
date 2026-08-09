@@ -136,9 +136,11 @@ export class DayTime {
       .addScaledVector(this.sunDir, sunW)
       .addScaledVector(this.moonDir, moonW)
       .normalize();
-    this.lightColor.setRGB(0, 0, 0)
-      .addScaledVector(this.sunColor, sunW)
-      .addScaledVector(moonColor, moonW);
+    this.lightColor.setRGB(
+      this.sunColor.r * sunW + moonColor.r * moonW,
+      this.sunColor.g * sunW + moonColor.g * moonW,
+      this.sunColor.b * sunW + moonColor.b * moonW
+    );
     const wSum = Math.max(sunW + moonW, 1e-3);
     this.lightColor.multiplyScalar((0.15 + 0.85 * domW) / wSum); // 无月深夜几乎无高光，只剩暗反射
 
