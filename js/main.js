@@ -11,6 +11,10 @@ import { createWorld, ISLAND_DEFS } from './world.js';
 import { WakeManager } from './wake.js';
 import { Weather } from './weather.js';
 import { DayTime } from './daytime.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { GameAudio } from './audio.js';
 
 // ===== 渲染器 / 场景 / 相机 =====
@@ -25,10 +29,65 @@ document.getElementById('app').appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
 
+// ===== 后处理：RenderPass → 水下折射/水线 meniscus → OutputPass =====
+// r160 中渲染到 RenderTarget 时材质不做色调映射/sRGB 转换，最终由 OutputPass 统一处理（与直出等价）
+const WarpShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTime: { value: 0 },
+    uWarp: { value: 0 },       // 水下折射扰动强度 = underT × 天气 warp
+    uMeniscus: { value: 0 },   // 水线亮带强度（相机在波面 ±0.5m 内）
+    uWaterlineY: { value: 0.5 }, // 水线的屏幕 y（0~1，由相机俯仰近似推算）
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform float uTime;
+    uniform float uWarp;
+    uniform float uMeniscus;
+    uniform float uWaterlineY;
+    varying vec2 vUv;
+
+    void main() {
+      vec2 uv = vUv;
+      // 水下折射扰动：两组正弦扭动（强度随天气分级）
+      if (uWarp > 0.001) {
+        uv.x += sin(uv.y * 30.0 + uTime * 2.2) * 0.006 * uWarp
+              + sin(uv.y * 13.0 - uTime * 1.3) * 0.004 * uWarp;
+        uv.y += sin(uv.x * 24.0 - uTime * 1.8) * 0.006 * uWarp;
+      }
+      vec4 col = texture2D(tDiffuse, uv);
+      // meniscus：水线附近的水平亮带 + 下方轻微压暗模拟透镜拉伸
+      if (uMeniscus > 0.001) {
+        float d = abs(vUv.y - uWaterlineY);
+        float band = exp(-d * d * 900.0);
+        col.rgb += vec3(0.9, 0.97, 1.0) * band * uMeniscus * 0.5;
+        float below = smoothstep(0.0, 0.06, uWaterlineY - vUv.y) * uMeniscus;
+        col.rgb *= 1.0 - below * 0.08;
+      }
+      gl_FragColor = col;
+    }
+  `,
+};
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const warpPass = new ShaderPass(WarpShader);
+composer.addPass(warpPass);
+composer.addPass(new OutputPass());
+let menT = 0; // meniscus 强度（平滑）
+const camDirVec = new THREE.Vector3();
+
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  composer.setSize(window.innerWidth, window.innerHeight);
 });
 
 // ===== 世界 =====
@@ -70,6 +129,7 @@ function applyQuality(q) {
   const def = QUALITY_LEVELS[q];
   sessionStorage.setItem(QUALITY_KEY, q);
   renderer.setPixelRatio(def.pixelRatio);
+  composer.setPixelRatio(def.pixelRatio);
   water.setDetailWaves(def.detailWaves);
   combat.particleScale = def.particleScale;
   weather.setRainDensity(def.rainDensity);
@@ -994,6 +1054,19 @@ function updateUnderwater(dt, time) {
   }
   $('uw-overlay').style.opacity = (underT * 0.85).toFixed(3);
   // TODO(音频): 此处可用 underT 驱动环境音低通滤波实现闷化（已通过 setEnvironment 接入）
+
+  // ---- 后处理 uniform：水下折射扰动 + 水线 meniscus ----
+  warpPass.uniforms.uTime.value = time;
+  warpPass.uniforms.uWarp.value = underT * weather.warp; // 扰动强度按天气分级
+  const camWaveDist = Math.abs(cam.y - getWaveHeight(cam.x, cam.z, time));
+  const menTarget = THREE.MathUtils.clamp(1 - camWaveDist / 0.5, 0, 1);
+  menT += (menTarget - menT) * Math.min(1, dt * 8);
+  warpPass.uniforms.uMeniscus.value = menT;
+  // 水线屏幕 y 近似：由相机俯仰推算水平视线的落点
+  camera.getWorldDirection(camDirVec);
+  const pitch = Math.asin(THREE.MathUtils.clamp(camDirVec.y, -1, 1));
+  const ndcY = -Math.tan(pitch) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  warpPass.uniforms.uWaterlineY.value = THREE.MathUtils.clamp(0.5 + 0.5 * ndcY, -0.5, 1.5);
 }
 
 // ===== 船只碰撞（椭圆碰撞体 + 撞击伤害） =====
@@ -1223,5 +1296,5 @@ renderer.setAnimationLoop(() => {
   if ((mmFrame++ & 3) === 0) drawMinimap(); // 小地图 ~15fps 节流
   updateHUD();
 
-  renderer.render(scene, camera);
+  composer.render();
 });

@@ -189,13 +189,21 @@ const fragmentShader = /* glsl */ `
     float sss = pow(max(dot(v, uSunDir), 0.0), 3.0) * crest;
     col += uSSSColor * sss * 0.55 * uDaylight; // 夜晚透光减弱
 
-    // ---- 太阳高光：宽高光 + 噪声调制的窄闪点（glitter） ----
+    // ---- 日月光路：各向异性高光（宽高光带 + 噪声调制的窄闪点 glitter） ----
+    // 法线扰动在"光源方位"方向保持、垂直方向放大 3 倍粗糙度（Cox-Munk 近似），
+    // 高光沿太阳/月亮方位拉成朝观察者延伸的带状光路
     vec3 h = normalize(uSunDir + v);
-    float ndh = max(dot(n, h), 0.0);
-    col += uSunColor * pow(ndh, 260.0) * 1.2;
+    vec2 sunAz = normalize(uSunDir.xz + vec2(1e-4, 0.0));
+    vec2 perpAz = vec2(-sunAz.y, sunAz.x);
+    float nAlong = dot(n.xz, sunAz);
+    float nAcross = dot(n.xz, perpAz) * 3.0;
+    vec3 na = normalize(vec3(sunAz.x * nAlong + perpAz.x * nAcross, n.y, sunAz.y * nAlong + perpAz.y * nAcross));
+    float ndh = max(dot(na, h), 0.0);
+    float lightLv = 0.35 + 0.65 * uDaylight; // 夜晚月光光路略弱；min() 防正午曝白
+    col += uSunColor * min(pow(ndh, 260.0) * 1.2, 1.4) * lightLv;
     float g = vnoise(vWorldPos.xz * 22.0 + vec2(uTime * 1.8, -uTime * 1.3));
     float glitter = pow(ndh, 520.0) * smoothstep(0.55, 0.95, g);
-    col += uSunColor * glitter * 3.0 * (0.3 + 0.7 * detailFade) * (0.15 + 0.85 * uDaylight);
+    col += uSunColor * min(glitter * 3.0, 2.0) * (0.3 + 0.7 * detailFade) * (0.15 + 0.85 * uDaylight);
 
     // ---- 破浪白沫：雅可比 + 波高阈值，噪声打散边缘，波谷渐隐 ----
     float foamN = vnoise(vWorldPos.xz * 2.3 + vec2(uTime * 0.12, -uTime * 0.09));

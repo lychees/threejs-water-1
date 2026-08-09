@@ -9,37 +9,37 @@ export const PRESETS = {
   clear: {
     name: '晴朗', icon: '☀️',
     waveScale: 1.0, foamBoost: 0.0, cloud: 0.15, rain: 0, rainDensity: 0,
-    speedMul: 1.0, lightMul: 1.0, fogMul: 1.0, grayT: 0.0,
+    speedMul: 1.0, lightMul: 1.0, fogMul: 1.0, grayT: 0.0, warp: 0.15,
   },
   cloudy: {
     name: '多云', icon: '⛅',
     waveScale: 0.85, foamBoost: 0.03, cloud: 0.55, rain: 0, rainDensity: 0,
-    speedMul: 1.0, lightMul: 0.75, fogMul: 0.9, grayT: 0.35,
+    speedMul: 1.0, lightMul: 0.75, fogMul: 0.9, grayT: 0.35, warp: 0.2,
   },
   drizzle: {
     name: '小雨', icon: '🌦️',
     waveScale: 1.15, foamBoost: 0.06, cloud: 0.5, rain: 0.2, rainDensity: 0.2,
-    speedMul: 1.0, lightMul: 0.85, fogMul: 0.95, grayT: 0.25,
+    speedMul: 1.0, lightMul: 0.85, fogMul: 0.95, grayT: 0.25, warp: 0.35,
   },
   rain: {
     name: '中雨', icon: '🌧️',
     waveScale: 1.3, foamBoost: 0.1, cloud: 0.6, rain: 0.45, rainDensity: 0.45,
-    speedMul: 0.95, lightMul: 0.75, fogMul: 0.9, grayT: 0.35,
+    speedMul: 0.95, lightMul: 0.75, fogMul: 0.9, grayT: 0.35, warp: 0.5,
   },
   heavy: {
     name: '大雨', icon: '🌧️',
     waveScale: 1.5, foamBoost: 0.15, cloud: 0.68, rain: 0.7, rainDensity: 0.7,
-    speedMul: 0.85, lightMul: 0.65, fogMul: 0.88, grayT: 0.42,
+    speedMul: 0.85, lightMul: 0.65, fogMul: 0.88, grayT: 0.42, warp: 0.7,
   },
   storm: {
     name: '暴风雨', icon: '⛈️',
     waveScale: 1.8, foamBoost: 0.22, cloud: 0.75, rain: 1.0, rainDensity: 1.0,
-    speedMul: 0.75, lightMul: 0.55, fogMul: 0.85, grayT: 0.5,
+    speedMul: 0.75, lightMul: 0.55, fogMul: 0.85, grayT: 0.5, warp: 1.0,
   },
   fog: {
     name: '大雾', icon: '🌫️',
     waveScale: 0.7, foamBoost: 0.0, cloud: 0.6, rain: 0, rainDensity: 0,
-    speedMul: 0.9, lightMul: 0.85, fogMul: 0.38, grayT: 0.7,
+    speedMul: 0.9, lightMul: 0.85, fogMul: 0.38, grayT: 0.7, warp: 0.2,
   },
 };
 
@@ -52,7 +52,7 @@ const WIND_X = 6;                   // 风暴横向风速（雨倾斜）
 const MIN_BRIGHTNESS = 0.35;        // 主光+半球光强度下限（防夜晚+风暴黑到看不见）
 const GRAY = new THREE.Color(0x6a7a85); // 阴雨灰化目标色
 
-const NUM_FIELDS = ['waveScale', 'foamBoost', 'cloud', 'rain', 'rainDensity', 'speedMul', 'lightMul', 'fogMul', 'grayT'];
+const NUM_FIELDS = ['waveScale', 'foamBoost', 'cloud', 'rain', 'rainDensity', 'speedMul', 'lightMul', 'fogMul', 'grayT', 'warp'];
 
 function rand(min, max) { return min + Math.random() * (max - min); }
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -112,6 +112,7 @@ export class Weather {
   get speedMul() { return this.params.speedMul; }
   get fogNear() { return this.fogNearV; }
   get fogFar() { return this.fogFarV; }
+  get warp() { return this.params.warp; } // 水下折射扰动强度
   get icon() { return PRESETS[this.current].icon; }
   get name() { return PRESETS[this.current].name; }
 
