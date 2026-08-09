@@ -227,6 +227,8 @@ export async function createWorld(scene, waveFn) {
   // ---- 对外接口 ----
   return {
     islands,
+    buoys,      // 小地图用：{ mesh } 列表
+    supplies,   // 小地图用：{ mesh, kind, active } 列表
 
     // 圆柱碰撞：进入半径的船被沿径向推开并减速
     resolveCollisions(ship) {

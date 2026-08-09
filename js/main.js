@@ -333,6 +333,94 @@ $('mute-btn').addEventListener('click', () => {
 applyQuality(quality);
 syncMuteBtn(audio.muted);
 
+// 天气图标点击手动切换（重置自动计时器）
+$('weather-stat').addEventListener('click', () => weather.toggle());
+
+// ===== 小地图（2D canvas 海图，隔帧绘制 ~15fps） =====
+const minimap = $('minimap');
+const mmCtx = minimap.getContext('2d');
+let mmLarge = false;
+let mmFrame = 0;
+minimap.addEventListener('click', () => {
+  mmLarge = !mmLarge;
+  minimap.classList.toggle('large', mmLarge);
+});
+
+function drawMinimap() {
+  const W = minimap.width;          // 340 后备分辨率，CSS 缩放显示
+  const cx = W / 2;
+  const range = mmLarge ? 600 : 400; // 海图半径（米）
+  const s = (cx - 8) / range;
+  const px = player.position.x;
+  const pz = player.position.z;
+  const rim = cx - 10;
+
+  mmCtx.clearRect(0, 0, W, W);
+  mmCtx.save();
+  mmCtx.beginPath();
+  mmCtx.arc(cx, cx, cx - 2, 0, Math.PI * 2);
+  mmCtx.clip();
+  mmCtx.fillStyle = 'rgba(6, 30, 44, 0.72)';
+  mmCtx.fillRect(0, 0, W, W);
+
+  // 世界 -Z 为北（屏幕上）：世界位移 → 屏幕位移直接映射
+  const toMapX = (wx) => cx + (wx - px) * s;
+  const toMapY = (wz) => cx + (wz - pz) * s;
+  const dot = (x, y, r, color) => {
+    mmCtx.fillStyle = color;
+    mmCtx.beginPath();
+    mmCtx.arc(x, y, r, 0, Math.PI * 2);
+    mmCtx.fill();
+  };
+
+  if (world) {
+    // 岛屿：绿色块（按碰撞半径画圆）
+    for (const isl of world.islands) {
+      dot(toMapX(isl.x), toMapY(isl.z), Math.max(3, isl.radius * s), '#3f7a4f');
+    }
+    // 浮标：橙色小点
+    for (const b of world.buoys) {
+      dot(toMapX(b.mesh.position.x), toMapY(b.mesh.position.z), 3, '#e8862e');
+    }
+    // 漂浮补给：修复=木色，宝箱=金色
+    for (const sp of world.supplies) {
+      if (!sp.active) continue;
+      dot(toMapX(sp.mesh.position.x), toMapY(sp.mesh.position.z), 3.5,
+        sp.kind === 'loot' ? '#ffd76e' : '#b5854a');
+    }
+  }
+
+  // 敌船：红点；超出范围的钳到边缘指示方向
+  for (const e of fleet.enemies) {
+    if (e.sinking) continue;
+    let dx = (e.position.x - px) * s;
+    let dy = (e.position.z - pz) * s;
+    const d = Math.hypot(dx, dy);
+    if (d > rim) { dx *= rim / d; dy *= rim / d; }
+    dot(cx + dx, cx + dy, 4.5, '#e0483e');
+  }
+
+  // 玩家：中心白色三角，指示船头朝向
+  mmCtx.save();
+  mmCtx.translate(cx, cx);
+  mmCtx.rotate(Math.PI - player.heading); // 船头 forward=(sinθ,cosθ) → 屏幕 (sinθ,cosθ)
+  mmCtx.fillStyle = '#ffffff';
+  mmCtx.beginPath();
+  mmCtx.moveTo(0, -8);
+  mmCtx.lineTo(5.5, 6);
+  mmCtx.lineTo(-5.5, 6);
+  mmCtx.closePath();
+  mmCtx.fill();
+  mmCtx.restore();
+
+  // 指北针（固定世界北 = -Z = 屏幕上方，与相机无关）
+  mmCtx.fillStyle = '#e8a33d';
+  mmCtx.font = 'bold 15px sans-serif';
+  mmCtx.textAlign = 'center';
+  mmCtx.fillText('N', cx, 20);
+  mmCtx.restore();
+}
+
 // ===== 触屏摇杆（仅触屏设备显示） =====
 let touchTurn = 0; // 摇杆横轴转向输入（-1 ~ 1）
 (function initTouchUI() {
@@ -731,6 +819,7 @@ renderer.setAnimationLoop(() => {
   updateCamera(dt, time);
   updateUnderwater(dt, time);
   audio.setEnvironment(weather.strength, camera.position.y, underT);
+  if ((mmFrame++ & 3) === 0) drawMinimap(); // 小地图 ~15fps 节流
   updateHUD();
 
   renderer.render(scene, camera);

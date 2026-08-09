@@ -42,6 +42,12 @@
   /* ===== HUD 小按钮 ===== */
   .hud-btn { pointer-events: auto; cursor: pointer; color: #fff; font-size: 15px; font-weight: bold; font-family: inherit; }
   .hud-btn:hover { border-color: #e8a33d; }
+  #weather-stat { pointer-events: auto; cursor: pointer; }
+  #weather-stat:hover { border-color: #e8a33d; }
+
+  /* ===== 小地图 ===== */
+  #minimap { position: absolute; top: 16px; right: 20px; width: 180px; height: 180px; border-radius: 50%; border: 2.5px solid rgba(232,163,61,.75); box-shadow: 0 0 12px rgba(0,0,0,.5); pointer-events: auto; cursor: pointer; }
+  #minimap.large { width: 340px; height: 340px; }
 
   /* ===== 触屏控件 ===== */
   #touch-ui { display: none; }
@@ -105,11 +111,12 @@
     <div class="stat">击沉 <span id="kills">0</span></div>
     <div class="stat">战利品 <span id="loot">0</span></div>
     <div class="stat">第 <span id="wave">1</span> 波</div>
-    <div class="stat">天气 <span id="weather-icon">☀️</span></div>
+    <div class="stat" id="weather-stat" title="点击切换天气">天气 <span id="weather-icon">☀️</span></div>
     <div class="stat">相机 <span id="cam-mode">跟随</span></div>
     <button id="quality-btn" class="stat hud-btn">画质：高</button>
     <button id="mute-btn" class="stat hud-btn">🔊</button>
   </div>
+  <canvas id="minimap" width="340" height="340" title="点击展开/收起海图"></canvas>
   <div id="hp-wrap">
     <div class="bar-label">船体耐久</div>
     <div class="bar"><div id="hp-fill"></div></div>

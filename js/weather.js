@@ -62,6 +62,12 @@ export class Weather {
 
   get isStorm() { return this.strength > 0.5; }
 
+  // 手动切换（点击 HUD 天气图标）：立即翻转目标并重置自动切换计时器
+  toggle() {
+    this.target = this.target > 0.5 ? 0 : 1;
+    this.timer = rand(MIN_INTERVAL, MAX_INTERVAL);
+  }
+
   update(dt) {
     // 随机切换
     this.timer -= dt;
