@@ -1,0 +1,241 @@
+// 入口：场景装配、输入、相机、HUD、游戏状态机、主循环
+import * as THREE from 'three';
+import { createWater, getWaveHeight } from './water.js';
+import { createSky, SUN_DIR } from './sky.js';
+import { Ship } from './ship.js';
+import { Combat } from './combat.js';
+import { EnemyFleet } from './enemy.js';
+
+// ===== 渲染器 / 场景 / 相机 =====
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ===== 世界 =====
+const sky = createSky(scene);
+const water = createWater(SUN_DIR);
+scene.add(water.mesh);
+const combat = new Combat(scene, getWaveHeight);
+
+// ===== 玩家 =====
+const player = new Ship(scene, {
+  hullColor: 0x7a4f2a,
+  sailColor: 0xf3ead5,
+  hp: 100,
+  maxSpeed: 15,
+  turnRate: 1.0,
+});
+
+// ===== 敌人 =====
+const fleet = new EnemyFleet(scene, combat);
+
+// ===== 游戏状态 =====
+let state = 'menu'; // menu | playing | over
+let kills = 0;
+let sailLevel = 0;              // 0 降帆 ~ 3 满帆
+const RELOAD_TIME = 3.2;
+let cooldownL = 0;
+let cooldownR = 0;
+let gameOverT = 0;
+
+// ===== HUD =====
+const $ = (id) => document.getElementById(id);
+const hud = $('hud');
+const SAIL_NAMES = ['降帆', '半帆', '大半帆', '满帆'];
+
+function updateHUD() {
+  $('hp-fill').style.width = `${(player.hp / player.maxHp) * 100}%`;
+  $('kills').textContent = kills;
+  $('wave').textContent = fleet.wave;
+  $('sail-state').textContent = `帆位：${SAIL_NAMES[sailLevel]}（W 升帆 / S 降帆）`;
+  $('reload-l').style.width = `${(1 - cooldownL / RELOAD_TIME) * 100}%`;
+  $('reload-r').style.width = `${(1 - cooldownR / RELOAD_TIME) * 100}%`;
+}
+
+// ===== 输入 =====
+const keys = {};
+window.addEventListener('keydown', (e) => {
+  keys[e.code] = true;
+  if (state !== 'playing') return;
+  if (e.code === 'KeyW') setSail(Math.min(3, sailLevel + 1));
+  if (e.code === 'KeyS') setSail(Math.max(0, sailLevel - 1));
+  if (e.code === 'KeyQ') fire(-1);
+  if (e.code === 'KeyE') fire(1);
+});
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+// 鼠标：移动环视；左键左舷齐射，右键右舷齐射
+let mouseNX = 0; // -0.5 ~ 0.5
+let mouseNY = 0;
+window.addEventListener('mousemove', (e) => {
+  mouseNX = e.clientX / window.innerWidth - 0.5;
+  mouseNY = e.clientY / window.innerHeight - 0.5;
+});
+window.addEventListener('mousedown', (e) => {
+  if (state !== 'playing') return;
+  if (e.button === 0) fire(-1);
+  if (e.button === 2) fire(1);
+});
+window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+function setSail(level) {
+  sailLevel = level;
+  player.setSailAmount(level / 3);
+}
+
+function fire(side) {
+  if (player.sinking) return;
+  if (side < 0 && cooldownL > 0) return;
+  if (side > 0 && cooldownR > 0) return;
+  combat.fireBroadside(player, side, { count: 3, speed: 30, spread: 0.05, fromPlayer: true });
+  if (side < 0) cooldownL = RELOAD_TIME;
+  else cooldownR = RELOAD_TIME;
+}
+
+// ===== 开始 / 结束 / 重开 =====
+function begin() {
+  $('start-overlay').classList.add('hidden');
+  hud.classList.remove('hidden');
+  state = 'playing';
+  setSail(2);
+  fleet.spawnOne(player.position);
+  fleet.spawnOne(player.position);
+}
+
+$('start-btn').addEventListener('click', begin);
+
+// 重开后直接进游戏（跳过开始界面）
+if (sessionStorage.getItem('waters-autostart') === '1') {
+  sessionStorage.removeItem('waters-autostart');
+  begin();
+}
+
+function gameOver() {
+  state = 'over';
+  gameOverT = 0;
+}
+
+window.addEventListener('keydown', (e) => {
+  if (state === 'over' && e.code === 'KeyR' && !$('gameover-overlay').classList.contains('hidden')) {
+    sessionStorage.setItem('waters-autostart', '1');
+    location.reload();
+  }
+});
+
+// ===== 命中回调 =====
+function onHit(ball, target) {
+  const dmg = target.isPlayer ? 12 : 20;
+  const sunk = target.ship.takeDamage(dmg);
+  if (sunk && target.isPlayer) gameOver();
+}
+
+const fleetHooks = {
+  onEnemySunk() {
+    kills += 1;
+  },
+  onWaveUp() {
+    // 波次提升，HUD 每帧自动刷新
+  },
+};
+
+// ===== 相机 =====
+let camYaw = 0;
+let camPitch = 0.32;
+const camTarget = new THREE.Vector3();
+
+function updateCamera(dt, time) {
+  const p = player.position;
+  // 平滑逼近鼠标目标角度
+  const k = 1 - Math.exp(-6 * dt);
+  camYaw += (-mouseNX * Math.PI * 1.4 - camYaw) * k;
+  camPitch += (THREE.MathUtils.clamp(0.3 + mouseNY * 0.9, 0.06, 1.1) - camPitch) * k;
+
+  const dist = 15;
+  const angle = player.heading + Math.PI + camYaw; // 默认在船尾后方
+  const horiz = Math.cos(camPitch) * dist;
+  const cx = p.x + Math.sin(angle) * horiz;
+  const cz = p.z + Math.cos(angle) * horiz;
+  let cy = p.y + 2.5 + Math.sin(camPitch) * dist;
+  // 镜头受波浪轻微影响，且不入水
+  cy += getWaveHeight(cx, cz, time) * 0.25;
+  cy = Math.max(cy, getWaveHeight(cx, cz, time) + 2.0);
+
+  camera.position.set(cx, cy, cz);
+  camTarget.set(p.x, p.y + 3, p.z);
+  camera.lookAt(camTarget);
+}
+
+// ===== 主循环 =====
+const clock = new THREE.Clock();
+let time = 0;
+
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  time += dt;
+
+  // 玩家操控
+  if (state === 'playing' && !player.sinking) {
+    const targetSpeed = (sailLevel / 3) * player.maxSpeed;
+    player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
+    let turn = 0;
+    if (keys['KeyA']) turn -= 1;
+    if (keys['KeyD']) turn += 1;
+    // 速度越快舵效越好，但停船也能缓慢转向
+    const steer = player.turnRate * (0.35 + 0.65 * (player.speed / player.maxSpeed));
+    player.heading += turn * steer * dt;
+  }
+
+  // 冷却
+  cooldownL = Math.max(0, cooldownL - dt);
+  cooldownR = Math.max(0, cooldownR - dt);
+
+  // 实体更新
+  player.update(dt, time, getWaveHeight);
+  fleet.update(dt, time, player, getWaveHeight, fleetHooks);
+
+  // 命中判定目标列表
+  const targets = [{ ship: player, isPlayer: true }];
+  for (const e of fleet.enemies) targets.push({ ship: e, isPlayer: false });
+  combat.update(dt, time, targets, onHit);
+
+  // 沉船冒泡
+  const sinkingShips = [player, ...fleet.enemies].filter((s) => s.sinking && !s.dead);
+  for (const s of sinkingShips) {
+    if (Math.random() < dt * 8) {
+      const pos = s.position.clone();
+      pos.x += (Math.random() - 0.5) * 4;
+      pos.z += (Math.random() - 0.5) * 4;
+      pos.y = getWaveHeight(pos.x, pos.z, time);
+      combat.bubbles(pos);
+    }
+  }
+
+  // 游戏结束：沉船动画播一会儿再弹遮罩
+  if (state === 'over') {
+    gameOverT += dt;
+    if (gameOverT > 3.2 && $('gameover-overlay').classList.contains('hidden')) {
+      $('final-kills').textContent = kills;
+      $('gameover-overlay').classList.remove('hidden');
+    }
+  }
+
+  water.update(time);
+  sky.update(dt);
+  updateCamera(dt, time);
+  updateHUD();
+
+  renderer.render(scene, camera);
+});

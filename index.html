@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>怒海争锋 · Three.js 海战小游戏</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0a2a3a; font-family: "Microsoft YaHei", sans-serif; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* ===== HUD ===== */
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  #top-bar { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 28px; font-size: 18px; font-weight: bold; }
+  .stat { background: rgba(0, 20, 35, .45); padding: 6px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,.25); }
+
+  #hp-wrap { position: absolute; left: 24px; bottom: 24px; width: 260px; }
+  .bar-label { font-size: 13px; margin-bottom: 4px; letter-spacing: 1px; }
+  .bar { height: 16px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.4); border-radius: 8px; overflow: hidden; }
+  .bar > div { height: 100%; transition: width .15s; }
+  #hp-fill { width: 100%; background: linear-gradient(90deg, #e74c3c, #2ecc71); }
+  #sail-state { margin-top: 8px; font-size: 14px; }
+
+  #reload-wrap { position: absolute; right: 24px; bottom: 24px; width: 220px; text-align: right; }
+  .reload-row { margin-top: 6px; font-size: 14px; }
+  .reload-bar { height: 8px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.35); border-radius: 4px; overflow: hidden; margin-top: 2px; }
+  .reload-bar > div { height: 100%; background: #f1c40f; width: 100%; }
+
+  #help { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); font-size: 12.5px; opacity: .85; background: rgba(0,20,35,.4); padding: 6px 14px; border-radius: 8px; white-space: nowrap; }
+
+  /* ===== 遮罩 ===== */
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(4, 24, 40, .78); color: #fff; z-index: 10; text-align: center; }
+  .overlay h1 { font-size: 44px; margin: 0 0 12px; letter-spacing: 6px; }
+  .overlay p { font-size: 16px; line-height: 1.9; margin: 4px 0; opacity: .9; }
+  .overlay button { margin-top: 26px; font-size: 20px; padding: 12px 46px; border: none; border-radius: 30px; cursor: pointer; background: #e8a33d; color: #3a2405; font-weight: bold; letter-spacing: 4px; }
+  .overlay button:hover { background: #f5bc63; }
+  .hidden { display: none !important; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+
+<!-- 游戏内 HUD -->
+<div id="hud" class="hidden">
+  <div id="top-bar">
+    <div class="stat">击沉 <span id="kills">0</span></div>
+    <div class="stat">第 <span id="wave">1</span> 波</div>
+  </div>
+  <div id="hp-wrap">
+    <div class="bar-label">船体耐久</div>
+    <div class="bar"><div id="hp-fill"></div></div>
+    <div id="sail-state">帆位：降帆</div>
+  </div>
+  <div id="reload-wrap">
+    <div class="reload-row">左舷（鼠标左键 / Q）<div class="reload-bar"><div id="reload-l"></div></div></div>
+    <div class="reload-row">右舷（鼠标右键 / E）<div class="reload-bar"><div id="reload-r"></div></div></div>
+  </div>
+  <div id="help">W/S 升降帆调速 · A/D 转向 · 移动鼠标环视 · 左键/Q 左舷齐射 · 右键/E 右舷齐射</div>
+</div>
+
+<!-- 开始遮罩 -->
+<div id="start-overlay" class="overlay">
+  <h1>怒 海 争 锋</h1>
+  <p>W / S —— 升帆加速 / 降帆减速（共三档帆位）</p>
+  <p>A / D —— 左转 / 右转</p>
+  <p>移动鼠标 —— 环绕视角</p>
+  <p>鼠标左键 / Q —— 左舷齐射　　鼠标右键 / E —— 右舷齐射</p>
+  <p>把敌船引到舷侧再开火，击沉它们！</p>
+  <button id="start-btn">出 航</button>
+</div>
+
+<!-- 结束遮罩 -->
+<div id="gameover-overlay" class="overlay hidden">
+  <h1>船 沉 了 …</h1>
+  <p>本次战绩：击沉敌船 <span id="final-kills">0</span> 艘</p>
+  <p>按 R 重新开始</p>
+</div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>
