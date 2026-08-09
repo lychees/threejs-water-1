@@ -46,6 +46,12 @@
   #weather-stat, #cam-stat { pointer-events: auto; cursor: pointer; }
   #weather-stat:hover, #cam-stat:hover { border-color: #e8a33d; }
 
+  /* ===== 敌船血条（世界锚定，池化） ===== */
+  .enemy-hp { position: absolute; width: 90px; transform: translate(-50%, -100%); pointer-events: none; display: none; }
+  .enemy-hp .ehp-name { font-size: 10px; text-align: center; opacity: .85; margin-bottom: 2px; }
+  .enemy-hp .ehp-bar { height: 6px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.35); border-radius: 3px; overflow: hidden; }
+  .enemy-hp .ehp-fill { height: 100%; background: #e0483e; width: 100%; }
+
   /* ===== 小地图 ===== */
   #minimap { position: absolute; top: 16px; right: 20px; width: 180px; height: 180px; border-radius: 50%; border: 2.5px solid rgba(232,163,61,.75); box-shadow: 0 0 12px rgba(0,0,0,.5); pointer-events: auto; cursor: pointer; }
   #minimap.large { width: 340px; height: 340px; }

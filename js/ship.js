@@ -149,6 +149,7 @@ export class Ship {
     this.dead = false;  // 沉船动画播完，可移除
 
     this.debuff = { fire: 0, leak: 0, sail: 0 }; // 各 debuff 剩余秒数
+    this.hurtT = 0;     // 被玩家攻击后血条显示剩余秒数（main 驱动）
   }
 
   // 速度乘区（漏水 ×0.7、破帆 ×0.6，乘法叠加）
