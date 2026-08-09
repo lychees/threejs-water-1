@@ -1,7 +1,7 @@
 // 船：程序化低多边形帆船模型 + 浮力 + 运动/沉船状态
 import * as THREE from 'three';
 
-const WORLD_LIMIT = 430; // 活动范围半径，超出会被挡回
+const WORLD_LIMIT = 760; // 活动范围半径（远岛在 ~700m），超出会被挡回
 
 // 命中 debuff 数值表（独立判定，重复触发刷新时间，沉船时清除）
 export const DEBUFF_DEFS = {

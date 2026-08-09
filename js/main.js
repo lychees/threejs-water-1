@@ -805,7 +805,7 @@ function onHit(ball, target) {
   }
   if (!sunk) {
     // 雨天（风暴中）不附加着火
-    for (const key of target.ship.rollDebuffs(weather.strength > 0.5)) {
+    for (const key of target.ship.rollDebuffs(!weather.fireOut)) {
       // 敌船中 debuff：头上飘字；玩家中 debuff：HUD 图标表达（updateHUD）
       if (!target.isPlayer) floatTextAt(`敌船${DEBUFF_DEFS[key].label}！`, target.ship.position);
     }
@@ -1149,8 +1149,8 @@ renderer.setAnimationLoop(() => {
   wakes.update(dt, time, [player, ...fleet.enemies]);
   resolveShipCollisions();
 
-  // 大雨灭火：风暴中所有船的着火立即清除
-  if (weather.strength > 0.5) {
+  // 大雨灭火：小雨及以上（fireOut）所有船的着火立即清除
+  if (weather.fireOut) {
     for (const s of [player, ...fleet.enemies]) {
       if (s.debuff.fire > 0) {
         s.debuff.fire = 0;

@@ -39,6 +39,7 @@ export class DayTime {
     this.fogNear = DAY.fogNear;
     this.fogFar = DAY.fogFar;
     this.nightT = 0;
+    this.daylight = 1; // 0 夜 ~ 1 昼（写入水面 uDaylight，夜晚压暗海面）
 
     // 星空：上半球随机点，夜晚淡入
     const starPos = new Float32Array(STAR_COUNT * 3);
@@ -88,6 +89,7 @@ export class DayTime {
     const nightT = THREE.MathUtils.smoothstep(-elev, 0.06, 0.22);
     const duskT = Math.max(0, 1 - dayT - nightT);
     this.nightT = nightT;
+    this.daylight = dayT + duskT * 0.55; // 黄昏半暗，夜晚为 0
 
     // 基底混合
     const mixColor = (out, a, b, c) => out.setRGB(
@@ -112,6 +114,7 @@ export class DayTime {
     // 写入共享 uniform：天空穹顶的太阳盘跟真实太阳，水面高光/反射跟实际光源（夜晚=月亮）
     this.skyUniforms.uSunDir.value.copy(this.sunDir);
     this.waterUniforms.uSunDir.value.copy(this.lightDir);
+    this.waterUniforms.uDaylight.value = this.daylight;
     this.sun.position.copy(this.lightDir).multiplyScalar(200);
 
     // 月亮与星星

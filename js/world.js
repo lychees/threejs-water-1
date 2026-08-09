@@ -47,11 +47,18 @@ function wrapProp(root, targetSize, bottomY = 0) {
   return g;
 }
 
-// ---- 岛屿布局（均离出生点 >100m，分布不同方位）；导出供水面碎浪带使用 ----
+// ---- 岛屿布局（近岛 ~350m，远岛 500~700m 鼓励远航）；导出供水面碎浪带使用 ----
 export const ISLAND_DEFS = [
   { id: 'coastal_cliff_01', size: 85, pos: [-270, -210], bottom: -14, veg: 14, fort: true },
   { id: 'coast_rocks_01',   size: 60, pos: [300, 180],   bottom: -6,  veg: 8 },
   { id: 'coastal_cliff_01', size: 50, pos: [60, 340],    bottom: -10, veg: 8 },
+  // 远岛：复用同类资产，不同缩放/朝向；植被减半，不放建筑
+  { id: 'coast_rocks_01',      size: 55, pos: [520, -160],  bottom: -6,  veg: 4 },
+  { id: 'coastal_cliff_01',    size: 65, pos: [-480, 260],  bottom: -12, veg: 6 },
+  { id: 'sand_rocks_small_01', size: 30, pos: [-150, -520], bottom: -3,  veg: 3 },
+  { id: 'coast_rocks_01',      size: 48, pos: [150, 560],   bottom: -5,  veg: 4 },
+  { id: 'coastal_cliff_01',    size: 70, pos: [-620, -80],  bottom: -12, veg: 6, pier: true }, // 点缀小码头
+  { id: 'sand_rocks_small_01', size: 26, pos: [620, 300],   bottom: -3,  veg: 2 },
 ];
 const VEG_DEFS = [
   { id: 'fern_02', size: 1.4 },
@@ -170,6 +177,15 @@ export async function createWorld(scene, waveFn) {
         pier.rotation.y = dirA;
         scene.add(pier);
       }
+    }
+    // 点缀码头（无要塞的岛也可单独放）
+    if (!def.fort && def.pier && templates.modular_wooden_pier) {
+      const dirA = Math.atan2(-def.pos[0], -def.pos[1]);
+      const pier = wrapProp(templates.modular_wooden_pier.clone(true), 14, 0.2);
+      pier.position.x = def.pos[0] + Math.sin(dirA) * radius * 0.95;
+      pier.position.z = def.pos[1] + Math.cos(dirA) * radius * 0.95;
+      pier.rotation.y = dirA + 0.6;
+      scene.add(pier);
     }
   }
 

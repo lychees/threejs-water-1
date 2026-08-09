@@ -4,26 +4,42 @@ import * as THREE from 'three';
 import { setWaveScale } from './water.js';
 
 // ---- 天气预设表（所有可调参数集中于此；光照/雾距为相对时间基底的乘区） ----
+// rain = 雨强（可见度/灭火阈值/音频联动）；rainDensity = 雨线密度；speedMul = 全船减速
 export const PRESETS = {
   clear: {
     name: '晴朗', icon: '☀️',
-    waveScale: 1.0, foamBoost: 0.0, cloud: 0.15, rain: 0,
+    waveScale: 1.0, foamBoost: 0.0, cloud: 0.15, rain: 0, rainDensity: 0,
     speedMul: 1.0, lightMul: 1.0, fogMul: 1.0, grayT: 0.0,
   },
   cloudy: {
     name: '多云', icon: '⛅',
-    waveScale: 0.85, foamBoost: 0.03, cloud: 0.55, rain: 0,
+    waveScale: 0.85, foamBoost: 0.03, cloud: 0.55, rain: 0, rainDensity: 0,
     speedMul: 1.0, lightMul: 0.75, fogMul: 0.9, grayT: 0.35,
+  },
+  drizzle: {
+    name: '小雨', icon: '🌦️',
+    waveScale: 1.15, foamBoost: 0.06, cloud: 0.5, rain: 0.2, rainDensity: 0.2,
+    speedMul: 1.0, lightMul: 0.85, fogMul: 0.95, grayT: 0.25,
+  },
+  rain: {
+    name: '中雨', icon: '🌧️',
+    waveScale: 1.3, foamBoost: 0.1, cloud: 0.6, rain: 0.45, rainDensity: 0.45,
+    speedMul: 0.95, lightMul: 0.75, fogMul: 0.9, grayT: 0.35,
+  },
+  heavy: {
+    name: '大雨', icon: '🌧️',
+    waveScale: 1.5, foamBoost: 0.15, cloud: 0.68, rain: 0.7, rainDensity: 0.7,
+    speedMul: 0.85, lightMul: 0.65, fogMul: 0.88, grayT: 0.42,
+  },
+  storm: {
+    name: '暴风雨', icon: '⛈️',
+    waveScale: 1.8, foamBoost: 0.22, cloud: 0.75, rain: 1.0, rainDensity: 1.0,
+    speedMul: 0.75, lightMul: 0.55, fogMul: 0.85, grayT: 0.5,
   },
   fog: {
     name: '大雾', icon: '🌫️',
-    waveScale: 0.7, foamBoost: 0.0, cloud: 0.6, rain: 0,
+    waveScale: 0.7, foamBoost: 0.0, cloud: 0.6, rain: 0, rainDensity: 0,
     speedMul: 0.9, lightMul: 0.85, fogMul: 0.38, grayT: 0.7,
-  },
-  storm: {
-    name: '风暴', icon: '⛈️',
-    waveScale: 1.8, foamBoost: 0.22, cloud: 0.75, rain: 1,
-    speedMul: 0.75, lightMul: 0.55, fogMul: 0.85, grayT: 0.5,
   },
 };
 
@@ -36,7 +52,7 @@ const WIND_X = 6;                   // 风暴横向风速（雨倾斜）
 const MIN_BRIGHTNESS = 0.35;        // 主光+半球光强度下限（防夜晚+风暴黑到看不见）
 const GRAY = new THREE.Color(0x6a7a85); // 阴雨灰化目标色
 
-const NUM_FIELDS = ['waveScale', 'foamBoost', 'cloud', 'rain', 'speedMul', 'lightMul', 'fogMul', 'grayT'];
+const NUM_FIELDS = ['waveScale', 'foamBoost', 'cloud', 'rain', 'rainDensity', 'speedMul', 'lightMul', 'fogMul', 'grayT'];
 
 function rand(min, max) { return min + Math.random() * (max - min); }
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -65,6 +81,7 @@ export class Weather {
     this.params = snapshot(PRESETS.clear);
     this.timer = rand(MIN_INTERVAL, MAX_INTERVAL);
     this.flash = 0;                       // 闪电余晖
+    this.qualityMul = 1;                  // 画质档位的雨密度系数
     this.fogColor = new THREE.Color(0xcfe9f3); // 供水下雾插值做水上面
     this.fogNearV = 90;
     this.fogFarV = 460;
@@ -90,7 +107,8 @@ export class Weather {
   }
 
   // ---- 对外接口 ----
-  get strength() { return this.params.rain; } // 雨天强度（灭火/音频沿用）
+  get strength() { return this.params.rain; } // 雨强（音频联动沿用）
+  get fireOut() { return this.params.rain >= 0.15; } // 小雨及以上：灭火 & 不新附着火
   get speedMul() { return this.params.speedMul; }
   get fogNear() { return this.fogNearV; }
   get fogFar() { return this.fogFarV; }
@@ -155,9 +173,10 @@ export class Weather {
     if (this.sun.intensity + hemiI < MIN_BRIGHTNESS) hemiI = MIN_BRIGHTNESS - this.sun.intensity;
     this.hemi.intensity = hemiI + this.flash * 2.5;
 
-    // ---- 雨 ----
+    // ---- 雨（密度 = 预设密度 × 画质密度） ----
     this.rain.visible = p.rain > 0.03;
     this.rainMat.opacity = p.rain * 0.55;
+    this.rainGeo.setDrawRange(0, Math.floor(RAIN_DROPS * p.rainDensity * this.qualityMul) * 2);
     if (this.rain.visible) {
       this.rain.position.copy(this.camera.position);
       const pos = this.rainGeo.attributes.position;
@@ -179,9 +198,9 @@ export class Weather {
     }
   }
 
-  // 画质档位：低密度时裁剪一半雨滴
+  // 画质档位：低密度时裁剪雨滴（与预设密度相乘）
   setRainDensity(mul) {
-    this.rainDensity = mul;
-    this.rainGeo.setDrawRange(0, Math.floor(RAIN_DROPS * mul) * 2);
+    this.qualityMul = mul;
+    this.rainGeo.setDrawRange(0, Math.floor(RAIN_DROPS * this.params.rainDensity * mul) * 2);
   }
 }

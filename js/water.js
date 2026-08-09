@@ -115,10 +115,11 @@ const fragmentShader = /* glsl */ `
   uniform vec3 uShallowColor;
   uniform vec3 uSSSColor;
   uniform vec3 uFoamColor;
-  uniform vec4 uIslands[4]; // x, z, 碎浪带半径, 呼吸相位（半径为 0 表示空槽位）
+  uniform vec4 uIslands[10]; // x, z, 碎浪带半径, 呼吸相位（半径为 0 表示空槽位）
   uniform float uFoamBoost;    // 天气驱动：风暴时白沫阈值降低
   uniform float uCloudAmount;  // 云影强度（晴天淡、风暴浓）
   uniform float uDetailWaves;  // 细节小波数量上限（画质档位）
+  uniform float uDaylight;     // 昼夜因子（0 夜 ~ 1 昼，daytime.js 写入）
 
   ${SKY_GLSL}
 
@@ -169,8 +170,8 @@ const fragmentShader = /* glsl */ `
       n = normalize(n + vec3(dn.x, 0.0, dn.y) * detailFade);
     }
 
-    // ---- 基础色：深蓝 -> 青绿随波高渐变 ----
-    vec3 col = mix(uDeepColor, uShallowColor, vHeight);
+    // ---- 基础色：深蓝 -> 青绿随波高渐变（夜晚随 uDaylight 压暗） ----
+    vec3 col = mix(uDeepColor, uShallowColor, vHeight) * (0.25 + 0.75 * uDaylight);
 
     // ---- 天空反射：反射向量查与天空穹顶同一个 skyColor()，水天无缝 ----
     vec3 r = reflect(-v, n);
@@ -186,7 +187,7 @@ const fragmentShader = /* glsl */ `
     // ---- 次表面散射：视线朝向太阳时，浪峰透出青绿辉光 ----
     float crest = smoothstep(0.45, 0.95, vHeight);
     float sss = pow(max(dot(v, uSunDir), 0.0), 3.0) * crest;
-    col += uSSSColor * sss * 0.55;
+    col += uSSSColor * sss * 0.55 * uDaylight; // 夜晚透光减弱
 
     // ---- 太阳高光：宽高光 + 噪声调制的窄闪点（glitter） ----
     vec3 h = normalize(uSunDir + v);
@@ -194,7 +195,7 @@ const fragmentShader = /* glsl */ `
     col += uSunColor * pow(ndh, 260.0) * 1.2;
     float g = vnoise(vWorldPos.xz * 22.0 + vec2(uTime * 1.8, -uTime * 1.3));
     float glitter = pow(ndh, 520.0) * smoothstep(0.55, 0.95, g);
-    col += uSunColor * glitter * 3.0 * (0.3 + 0.7 * detailFade);
+    col += uSunColor * glitter * 3.0 * (0.3 + 0.7 * detailFade) * (0.15 + 0.85 * uDaylight);
 
     // ---- 破浪白沫：雅可比 + 波高阈值，噪声打散边缘，波谷渐隐 ----
     float foamN = vnoise(vWorldPos.xz * 2.3 + vec2(uTime * 0.12, -uTime * 0.09));
@@ -204,7 +205,7 @@ const fragmentShader = /* glsl */ `
 
     // ---- 岛屿浅水碎浪带：碰撞半径附近一圈泡沫，噪声打散 + 随时间呼吸 ----
     float surf = 0.0;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 10; i++) {
       float ir = uIslands[i].z;
       if (ir < 0.1) continue;
       float rr = ir + sin(uTime * 0.7 + uIslands[i].w) * 1.5; // 呼吸
@@ -216,7 +217,7 @@ const fragmentShader = /* glsl */ `
     foam = max(foam, surf);
 
     foam *= 1.0 - smoothstep(150.0, 320.0, camDist);   // 远处淡出防摩尔纹
-    col = mix(col, uFoamColor, clamp(foam, 0.0, 1.0) * 0.9);
+    col = mix(col, uFoamColor * (0.3 + 0.7 * uDaylight), clamp(foam, 0.0, 1.0) * 0.9);
 
     gl_FragColor = vec4(col, 1.0);
     #include <tonemapping_fragment>
@@ -237,6 +238,7 @@ export function createWater(sunDir, islands = []) {
       uFoamBoost: { value: 0 },
       uCloudAmount: { value: 0.15 },
       uDetailWaves: { value: 10 },
+      uDaylight: { value: 1 },
       uDeepColor: { value: new THREE.Color(0x0b3b5e) },
       uShallowColor: { value: new THREE.Color(0x1e9e9a) },
       uSSSColor: { value: new THREE.Color(0x35d0b0) },
@@ -253,7 +255,7 @@ export function createWater(sunDir, islands = []) {
   uniforms.uWave2 = { value: WAVES.map((w) => new THREE.Vector4(w.omega, w.q, 0, 0)) };
   // 岛屿碎浪带：x, z, 半径, 呼吸相位；空槽位半径为 0
   uniforms.uIslands = {
-    value: [0, 1, 2, 3].map((i) => islands[i]
+    value: Array.from({ length: 10 }, (_, i) => islands[i]
       ? new THREE.Vector4(islands[i].x, islands[i].z, islands[i].radius, i * 1.7)
       : new THREE.Vector4(0, 0, 0, 0)),
   };
