@@ -301,7 +301,7 @@ function updateHUD() {
   $('kills').textContent = kills;
   $('loot').textContent = loot;
   $('wave').textContent = fleet.wave;
-  $('weather-icon').textContent = weather.isStorm ? '⛈️' : '☀️';
+  $('weather-icon').textContent = weather.target > 0.5 ? '⛈️' : '☀️';
   $('sail-state').textContent = sailLevel < 0
     ? '帆位：倒车（W 复位升帆）'
     : `帆位：${SAIL_NAMES[sailLevel]}（W 升帆 / S 降帆）`;
@@ -333,8 +333,11 @@ $('mute-btn').addEventListener('click', () => {
 applyQuality(quality);
 syncMuteBtn(audio.muted);
 
-// 天气图标点击手动切换（重置自动计时器）
-$('weather-stat').addEventListener('click', () => weather.toggle());
+// 天气图标点击手动切换（重置自动计时器）；过渡需 ~45s，给即时反馈避免误以为没点上
+$('weather-stat').addEventListener('click', () => {
+  weather.toggle();
+  floatText(weather.target > 0.5 ? '⛈️ 风暴逼近…' : '☀️ 天气转晴…');
+});
 
 // ===== 小地图（2D canvas 海图，隔帧绘制 ~15fps） =====
 const minimap = $('minimap');
