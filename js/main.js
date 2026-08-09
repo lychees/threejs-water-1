@@ -10,6 +10,7 @@ import { SHIP_DEFS, buildShip, buildFigurehead, FIGUREHEADS, loadFigureheadModel
 import { createWorld, ISLAND_DEFS } from './world.js';
 import { WakeManager } from './wake.js';
 import { Weather } from './weather.js';
+import { DayTime } from './daytime.js';
 import { GameAudio } from './audio.js';
 
 // ===== 渲染器 / 场景 / 相机 =====
@@ -47,6 +48,13 @@ const weather = new Weather({
 });
 const audio = new GameAudio();
 combat.onSplash = () => audio.splash();
+// 昼夜循环：产出光照/颜色基底，天气在其上乘法调光（loop 里先 daytime 后 weather）
+const dayTime = new DayTime({
+  scene, camera,
+  skyUniforms: sky.uniforms,
+  waterUniforms: water.uniforms,
+  sun: sky.sun,
+});
 
 // ===== 画质档位（高/中/低，存 sessionStorage） =====
 const QUALITY_KEY = 'waters-quality';
@@ -335,6 +343,11 @@ function updateHUD() {
   $('wave').textContent = fleet.wave;
   $('weather-icon').textContent = weather.icon;
   $('weather-stat').title = `天气：${weather.name}（点击切换）`;
+  // 昼夜时钟
+  const hh = Math.floor(dayTime.hour);
+  const mm = Math.floor((dayTime.hour - hh) * 60);
+  $('clock-icon').textContent = dayTime.isNight ? '🌙' : '🌞';
+  $('clock').textContent = `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
   $('sail-state').textContent = sailAmount < 0
     ? `帆位：倒车 ${Math.round(-sailAmount * 100)}%（W 复位）`
     : `帆位：${Math.round(sailAmount * 100)}%（按住 W/S 调整）`;
@@ -378,6 +391,8 @@ $('weather-stat').addEventListener('click', () => {
 });
 // 相机模式点击循环切换（快捷键 1/2/3 保留）
 $('cam-stat').addEventListener('click', () => setCamMode((camMode % 3) + 1));
+// 时钟点击快进 1 小时
+$('clock-stat').addEventListener('click', () => dayTime.advance());
 
 // ===== 小地图（2D canvas 海图，隔帧绘制 ~15fps） =====
 const minimap = $('minimap');
@@ -672,8 +687,10 @@ function makeFanViz() {
   geo.setIndex(idx);
   const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
     color: 0xffd76e, transparent: true, opacity: 0.22,
-    blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false,
+    blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    depthWrite: false, depthTest: false, // 始终画在水面之上，防浪高时穿插遮挡
   }));
+  mesh.renderOrder = 999;
   mesh.frustumCulled = false;
   mesh.visible = false;
   scene.add(mesh);
@@ -732,8 +749,8 @@ function updateFanViz(mesh, charge, side, time) {
     const zi = sz + cosA * rIn;
     const xo = sx + sinA * rOut;
     const zo = sz + cosA * rOut;
-    attr.setXYZ(i * 2, xi, getWaveHeight(xi, zi, time) + 0.15, zi);
-    attr.setXYZ(i * 2 + 1, xo, getWaveHeight(xo, zo, time) + 0.15, zo);
+    attr.setXYZ(i * 2, xi, getWaveHeight(xi, zi, time) + 0.6, zi);
+    attr.setXYZ(i * 2 + 1, xo, getWaveHeight(xo, zo, time) + 0.6, zo);
   }
   attr.needsUpdate = true;
   mesh.visible = true;
@@ -1197,7 +1214,8 @@ renderer.setAnimationLoop(() => {
 
   water.update(time);
   sky.update(dt);
-  weather.update(dt);
+  dayTime.update(dt); // 先算昼夜基底
+  weather.update(dt, dayTime); // 天气在基底上乘法调光
   updateCamera(dt, time);
   updateUnderwater(dt, time);
   updateEnemyHpBars(dt);

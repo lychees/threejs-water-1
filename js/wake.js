@@ -99,7 +99,7 @@ export class WakeManager {
           st.spawnT = 0.5 - speedRatio * 0.35; // 越快越密
           const x = p.x - fwd.x * 3.2 * ls + (Math.random() - 0.5) * 1.2 * ls;
           const z = p.z - fwd.z * 3.2 * ls + (Math.random() - 0.5) * 1.2 * ls;
-          this._spawnFoam(x, this.waveFn(x, z, time) + 0.06, z, (0.8 + speedRatio * 1.2) * ls);
+          this._spawnFoam(x, this.waveFn(x, z, time) + 0.25, z, (0.8 + speedRatio * 1.2) * ls);
         }
       }
 
@@ -109,7 +109,7 @@ export class WakeManager {
         if (!active) continue;
         const bx = p.x + fwd.x * 3.6 * ls;
         const bz = p.z + fwd.z * 3.6 * ls;
-        r.mesh.position.set(bx, this.waveFn(bx, bz, time) + 0.08, bz);
+        r.mesh.position.set(bx, this.waveFn(bx, bz, time) + 0.25, bz);
         const cycle = (time * (0.5 + speedRatio * 0.7) + r.phase) % 1;
         r.mesh.scale.setScalar((0.6 + cycle * 2.2) * ls);
         r.mesh.material.opacity = (1 - cycle) * 0.45 * speedRatio;

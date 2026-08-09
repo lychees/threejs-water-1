@@ -43,8 +43,8 @@
   /* ===== HUD 小按钮 ===== */
   .hud-btn { pointer-events: auto; cursor: pointer; color: #fff; font-size: 15px; font-weight: bold; font-family: inherit; }
   .hud-btn:hover { border-color: #e8a33d; }
-  #weather-stat, #cam-stat { pointer-events: auto; cursor: pointer; }
-  #weather-stat:hover, #cam-stat:hover { border-color: #e8a33d; }
+  #weather-stat, #cam-stat, #clock-stat { pointer-events: auto; cursor: pointer; }
+  #weather-stat:hover, #cam-stat:hover, #clock-stat:hover { border-color: #e8a33d; }
 
   /* ===== 敌船血条（世界锚定，池化） ===== */
   .enemy-hp { position: absolute; width: 90px; transform: translate(-50%, -100%); pointer-events: none; display: none; }
@@ -119,6 +119,7 @@
     <div class="stat">战利品 <span id="loot">0</span></div>
     <div class="stat">第 <span id="wave">1</span> 波</div>
     <div class="stat" id="weather-stat" title="点击切换天气">天气 <span id="weather-icon">☀️</span></div>
+    <div class="stat" id="clock-stat" title="点击快进 1 小时"><span id="clock-icon">🌞</span> <span id="clock">10:00</span></div>
     <div class="stat" id="cam-stat" title="点击切换相机模式">相机 <span id="cam-mode">跟随</span></div>
     <button id="quality-btn" class="stat hud-btn">画质：高</button>
     <button id="mute-btn" class="stat hud-btn">🔊</button>
