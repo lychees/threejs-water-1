@@ -57,50 +57,6 @@ const skyFragmentShader = /* glsl */ `
   }
 `;
 
-// 程序化低多边形小岛：岩锥 + 绿植 + 几棵棕榈
-function createIsland(scale) {
-  const g = new THREE.Group();
-
-  const rockMat = new THREE.MeshLambertMaterial({ color: 0x9a8563, flatShading: true });
-  const sandMat = new THREE.MeshLambertMaterial({ color: 0xe0cf9a, flatShading: true });
-  const leafMat = new THREE.MeshLambertMaterial({ color: 0x3f8f4f, flatShading: true });
-  const trunkMat = new THREE.MeshLambertMaterial({ color: 0x7a5a38, flatShading: true });
-
-  // 沙滩底座
-  const sand = new THREE.Mesh(new THREE.CylinderGeometry(16, 20, 3, 9), sandMat);
-  sand.position.y = -0.5;
-  g.add(sand);
-  // 岩山
-  const rock = new THREE.Mesh(new THREE.ConeGeometry(12, 12, 8), rockMat);
-  rock.position.y = 6;
-  g.add(rock);
-  // 山顶植被
-  const top = new THREE.Mesh(new THREE.ConeGeometry(6, 5, 7), leafMat);
-  top.position.y = 12.5;
-  g.add(top);
-  // 棕榈树（斜树干 + 几片大叶）
-  for (let i = 0; i < 3; i++) {
-    const tree = new THREE.Group();
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.4, 5, 5), trunkMat);
-    trunk.position.y = 2.5;
-    trunk.rotation.z = 0.15;
-    tree.add(trunk);
-    for (let j = 0; j < 5; j++) {
-      const leaf = new THREE.Mesh(new THREE.ConeGeometry(0.5, 3.2, 4), leafMat);
-      const a = (j / 5) * Math.PI * 2;
-      leaf.position.set(Math.cos(a) * 1.1, 5.2, Math.sin(a) * 1.1);
-      leaf.rotation.set(Math.sin(a) * 1.2, 0, -Math.cos(a) * 1.2);
-      tree.add(leaf);
-    }
-    const ang = (i / 3) * Math.PI * 2 + 0.7;
-    tree.position.set(Math.cos(ang) * 12, 0.8, Math.sin(ang) * 12);
-    g.add(tree);
-  }
-
-  g.scale.setScalar(scale);
-  return g;
-}
-
 // 程序化云：几个压扁的球拼一簇，缓慢漂移
 function createCloud() {
   const g = new THREE.Group();
@@ -155,13 +111,7 @@ export function createSky(scene) {
     clouds.push(c);
   }
 
-  // 远处两座小岛
-  const island1 = createIsland(1.2);
-  island1.position.set(-260, 0, -190);
-  scene.add(island1);
-  const island2 = createIsland(0.8);
-  island2.position.set(300, 0, 160);
-  scene.add(island2);
+  // （岛屿已改由 js/world.js 的真实模型布置）
 
   return {
     update(dt) {

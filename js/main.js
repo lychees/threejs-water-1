@@ -6,6 +6,7 @@ import { Ship, buildShipModel } from './ship.js';
 import { Combat } from './combat.js';
 import { EnemyFleet } from './enemy.js';
 import { loadShipModel, instantiateShip, SHIP_MODELS, DEFAULT_SHIP_ID, BASE_LENGTH } from './modelship.js';
+import { createWorld } from './world.js';
 
 // ===== 渲染器 / 场景 / 相机 =====
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -42,6 +43,10 @@ const player = new Ship(scene, {
 
 // ===== 敌人 =====
 const fleet = new EnemyFleet(scene, combat);
+
+// ===== 世界场景资产（岛屿/要塞/浮标/漂浮补给）：并行异步加载，不阻塞游戏开始 =====
+let world = null;
+createWorld(scene, getWaveHeight).then((w) => { world = w; });
 
 // ===== 玩家选船：读 sessionStorage 恢复上次选择，按需加载选中的模型 =====
 const STORAGE_KEY = 'waters-ship';
@@ -105,6 +110,7 @@ function buildShipCards() {
 // ===== 游戏状态 =====
 let state = 'menu'; // menu | playing | over
 let kills = 0;
+let loot = 0;               // 战利品（宝箱）计数
 let sailLevel = 0;              // 0 降帆 ~ 3 满帆
 const RELOAD_TIME = 3.2;
 let cooldownL = 0;
@@ -119,6 +125,7 @@ const SAIL_NAMES = ['降帆', '半帆', '大半帆', '满帆'];
 function updateHUD() {
   $('hp-fill').style.width = `${(player.hp / player.maxHp) * 100}%`;
   $('kills').textContent = kills;
+  $('loot').textContent = loot;
   $('wave').textContent = fleet.wave;
   $('sail-state').textContent = `帆位：${SAIL_NAMES[sailLevel]}（W 升帆 / S 降帆）`;
   $('reload-l').style.width = `${(1 - cooldownL / RELOAD_TIME) * 100}%`;
@@ -128,6 +135,28 @@ function updateHUD() {
 // 初始化选船界面并应用上次选择（需在 $ / sailLevel 声明之后调用）
 buildShipCards();
 applyShipChoice(selectedShipId);
+
+// ===== 拾取飘字 =====
+function floatText(msg) {
+  const el = document.createElement('div');
+  el.className = 'float-text';
+  el.textContent = msg;
+  el.style.marginLeft = `${Math.round((Math.random() - 0.5) * 120)}px`; // 避免连续拾取时叠在一起
+  hud.appendChild(el);
+  setTimeout(() => el.remove(), 1500);
+}
+
+// 漂浮补给拾取：木桶/木箱修船，宝箱记战利品
+function onPickup(item) {
+  combat.splash(item.mesh.position.clone());
+  if (item.kind === 'repair') {
+    player.hp = Math.min(player.maxHp, player.hp + 10);
+    floatText('+10 修复');
+  } else {
+    loot += 1;
+    floatText('+1 战利品');
+  }
+}
 
 // ===== 输入 =====
 const keys = {};
@@ -270,6 +299,13 @@ renderer.setAnimationLoop(() => {
   player.update(dt, time, getWaveHeight);
   fleet.update(dt, time, player, getWaveHeight, fleetHooks);
 
+  // 世界：岛屿碰撞 + 浮标/补给动画与拾取
+  if (world) {
+    world.resolveCollisions(player);
+    for (const e of fleet.enemies) world.resolveCollisions(e);
+    world.update(dt, time, state === 'playing' && !player.sinking ? player.position : null, onPickup);
+  }
+
   // 命中判定目标列表
   const targets = [{ ship: player, isPlayer: true }];
   for (const e of fleet.enemies) targets.push({ ship: e, isPlayer: false });
@@ -292,6 +328,7 @@ renderer.setAnimationLoop(() => {
     gameOverT += dt;
     if (gameOverT > 3.2 && $('gameover-overlay').classList.contains('hidden')) {
       $('final-kills').textContent = kills;
+      $('final-loot').textContent = loot;
       $('gameover-overlay').classList.remove('hidden');
     }
   }
