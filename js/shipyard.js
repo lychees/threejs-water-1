@@ -1,6 +1,7 @@
 // 参数化程序化船生成器 + 大航海时代2 全 25 船配置表
 // 输出接口 { group, setSailAmount } 与 Ship.setVisual 兼容；真实模型的 4 艘走 modelship.js
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 // ================= 共享材质（按颜色缓存，控制 drawcall 状态切换与内存） =================
 const matCache = new Map();
@@ -198,6 +199,58 @@ export function buildShip(spec, opts = {}) {
   return { group, setSailAmount };
 }
 
+// ================= 船首像注册表 =================
+// 全部有程序化低模（buildFigurehead）；带 model 字段的可走精致模型（勾选"使用精致模型"后按需加载）
+export const FIGUREHEADS = [
+  { id: 'none', cn: '无' },
+  { id: 'dragon', cn: '海龙' },
+  { id: 'skull', cn: '骷髅' },
+  { id: 'dolphin', cn: '海豚' },
+  { id: 'lion', cn: '狮首', model: 'lion_head' },
+  { id: 'horse', cn: '马首', model: 'horse_head' },
+  { id: 'shark', cn: '鲨鱼', model: 'bronze_shark_statue' },
+  { id: 'whale', cn: '鲸鱼', model: 'bronze_whale_statue' },
+  { id: 'ray', cn: '鳐鱼', model: 'bronze_ray_statue' },
+  { id: 'goddess', cn: '女神', model: 'gothic_statue' },
+];
+
+const FH_TARGET_SIZE = 1.2; // 精致船首像归一化尺寸（挂载时再按船长比例缩放）
+const fhCache = new Map();  // model id -> Promise<Group|null>
+
+// 归一化：长轴对齐 +Z（船头方向）、最长边缩到 FH_TARGET_SIZE、底部对齐 y=0
+function normalizeFigurehead(root) {
+  const g = new THREE.Group();
+  g.add(root);
+  g.updateMatrixWorld(true);
+  let box = new THREE.Box3().setFromObject(g);
+  let size = box.getSize(new THREE.Vector3());
+  if (size.x > size.z) { // 长轴转到 Z
+    root.rotation.y = Math.PI / 2;
+    g.updateMatrixWorld(true);
+    box = new THREE.Box3().setFromObject(g);
+    size = box.getSize(new THREE.Vector3());
+  }
+  const s = FH_TARGET_SIZE / Math.max(size.x, size.y, size.z);
+  g.scale.setScalar(s);
+  root.position.set(-(box.min.x + box.max.x) / 2, -box.min.y, -(box.min.z + box.max.z) / 2);
+  return g;
+}
+
+// 按需加载精致船首像（Promise 缓存；失败 resolve(null)，调用方回退低模）
+export function loadFigureheadModel(modelId) {
+  if (!fhCache.has(modelId)) {
+    fhCache.set(modelId, new Promise((resolve) => {
+      new GLTFLoader().load(
+        `models/${modelId}/${modelId}_1k.gltf`,
+        (gltf) => resolve(normalizeFigurehead(gltf.scene)),
+        undefined,
+        (err) => { console.warn(`[figurehead] ${modelId} 加载失败，回退低模：`, err); resolve(null); }
+      );
+    }));
+  }
+  return fhCache.get(modelId);
+}
+
 // ================= 船首像（低模 <200 三角面，共享材质缓存） =================
 // kind: 'dragon' 海龙 / 'skull' 骷髅 / 'dolphin' 海豚；朝 +Z（船头方向）
 export function buildFigurehead(kind) {
@@ -261,6 +314,104 @@ export function buildFigurehead(kind) {
     tail.rotation.x = -Math.PI / 2;
     tail.position.set(0, 0.28, -0.55);
     g.add(tail);
+  } else if (kind === 'lion') {
+    // 狮首：头球 + 鬃毛锥圈 + 吻部
+    const tawny = hullMat(0xb5854a);
+    const maneMat = hullMat(0x7a4f22);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), tawny);
+    head.position.set(0, 0.35, 0.05);
+    g.add(head);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 4), maneMat);
+      cone.position.set(Math.cos(a) * 0.22, 0.35 + Math.sin(a) * 0.22, 0.0);
+      cone.rotation.z = -a - Math.PI / 2; // 朝外
+      g.add(cone);
+    }
+    const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.14), tawny);
+    muzzle.position.set(0, 0.28, 0.24);
+    g.add(muzzle);
+  } else if (kind === 'horse') {
+    // 马首：斜颈 + 长头 + 双耳
+    const coat = hullMat(0x7a5a38);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.13, 0.55, 6), coat);
+    neck.position.set(0, 0.22, 0);
+    neck.rotation.x = 0.5;
+    g.add(neck);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.17, 0.45), coat);
+    head.position.set(0, 0.52, 0.28);
+    head.rotation.x = 0.25;
+    g.add(head);
+    for (const side of [-1, 1]) {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.14, 4), coat);
+      ear.position.set(side * 0.06, 0.66, 0.12);
+      g.add(ear);
+    }
+    const mane = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.5, 0.12), hullMat(0x3a2a18));
+    mane.position.set(0, 0.35, -0.13);
+    mane.rotation.x = 0.5;
+    g.add(mane);
+  } else if (kind === 'shark') {
+    // 鲨鱼：锥身 + 三角背鳍 + 尾鳍 + 张口
+    const bronze = hullMat(0x6f7a6a);
+    const body = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.75, 7), bronze);
+    body.rotation.x = Math.PI / 2;
+    body.position.set(0, 0.3, 0.05);
+    g.add(body);
+    const dorsal = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.25, 4), bronze);
+    dorsal.position.set(0, 0.5, -0.05);
+    g.add(dorsal);
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 4), bronze);
+    tail.rotation.x = -Math.PI / 2;
+    tail.position.set(0, 0.32, -0.42);
+    g.add(tail);
+    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.18), hullMat(0x2a2020));
+    jaw.position.set(0, 0.2, 0.38);
+    jaw.rotation.x = 0.4; // 张口
+    g.add(jaw);
+  } else if (kind === 'whale') {
+    // 鲸鱼：纺锤身 + 双尾鳍 + 小背鳍
+    const bronze = hullMat(0x5f6f72);
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.32, 8, 6), bronze);
+    body.scale.set(0.5, 0.42, 1.4);
+    body.position.y = 0.3;
+    g.add(body);
+    for (const side of [-1, 1]) {
+      const fluke = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.3, 4), bronze);
+      fluke.position.set(side * 0.14, 0.32, -0.5);
+      fluke.rotation.z = -side * 1.4;
+      fluke.rotation.x = -0.6;
+      g.add(fluke);
+    }
+    const dorsal = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.16, 4), bronze);
+    dorsal.position.set(0, 0.5, -0.1);
+    g.add(dorsal);
+  } else if (kind === 'ray') {
+    // 鳐鱼：扁菱形盘 + 细长尾
+    const bronze = hullMat(0x66707a);
+    const disc = new THREE.Mesh(new THREE.SphereGeometry(0.34, 6, 4), bronze);
+    disc.scale.set(1.35, 0.15, 1.0);
+    disc.position.y = 0.25;
+    g.add(disc);
+    const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.04, 0.55, 4), bronze);
+    tail.rotation.x = Math.PI / 2 + 0.15;
+    tail.position.set(0, 0.24, -0.55);
+    g.add(tail);
+  } else if (kind === 'goddess') {
+    // 女神：圆锥裙 + 球头 + 双臂
+    const marble = hullMat(0xd8d4cc);
+    const dress = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.7, 7), marble);
+    dress.position.y = 0.35;
+    g.add(dress);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 7, 6), marble);
+    head.position.y = 0.82;
+    g.add(head);
+    for (const side of [-1, 1]) {
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.4, 5), marble);
+      arm.position.set(side * 0.2, 0.62, 0.05);
+      arm.rotation.z = -side * 1.1; // 双臂上举
+      g.add(arm);
+    }
   }
   return g;
 }

@@ -17,7 +17,7 @@ export class EnemyFleet {
     this.respawnTimers = [];  // 待补充的倒计时
     this.wave = 1;
     this.killsThisWave = 0;
-    this.weatherStrength = 0; // 由 main 每帧写入：雨天全船减速
+    this.weatherSpeedMul = 1; // 由 main 每帧写入：天气全船减速
   }
 
   get targetCount() {
@@ -104,7 +104,7 @@ export class EnemyFleet {
         desired = angleToP + e.orbitDir * Math.PI * 0.5;
       }
       e.turnToward(desired, dt);
-      const targetSpeed = (dist > 20 ? e.maxSpeed : e.maxSpeed * 0.55) * e.speedMul * (1 - 0.25 * this.weatherStrength);
+      const targetSpeed = (dist > 20 ? e.maxSpeed : e.maxSpeed * 0.55) * e.speedMul * this.weatherSpeedMul;
       e.speed += (targetSpeed - e.speed) * Math.min(1, dt * 1.5);
 
       // 开火：舷侧大致对准玩家且进入射程

@@ -6,7 +6,7 @@ import { Ship, DEBUFF_DEFS } from './ship.js';
 import { Combat, BALL_GRAVITY } from './combat.js';
 import { EnemyFleet } from './enemy.js';
 import { loadShipModel, instantiateShip, SHIP_MODELS, BASE_LENGTH } from './modelship.js';
-import { SHIP_DEFS, buildShip, buildFigurehead, computeStats, FALLBACK_STATS, renderShipThumbnail, DEFAULT_SHIP_DEF_ID } from './shipyard.js';
+import { SHIP_DEFS, buildShip, buildFigurehead, FIGUREHEADS, loadFigureheadModel, computeStats, FALLBACK_STATS, renderShipThumbnail, DEFAULT_SHIP_DEF_ID } from './shipyard.js';
 import { createWorld, ISLAND_DEFS } from './world.js';
 import { WakeManager } from './wake.js';
 import { Weather } from './weather.js';
@@ -81,7 +81,6 @@ const BROADSIDE_SPEED = 40;     // 舷炮初速基准（满蓄力 ×1.5 = 60）
 const RUDDER_CURVE = 1.5;       // 舵效 ∝ (航速/极速)^RUDDER_CURVE（舵是翼面）
 const RUDDER_MIN_EFF = 0.05;    // 静止时的残存舵效
 const CAM_MAX_DIP = 6.0;        // 相机允许没入波面下的最大深度（不穿海底的底线）
-const SURFACE_FOG = { color: new THREE.Color(0xcfe9f3), near: 90, far: 460 };
 const UNDER_FOG = { color: new THREE.Color(0x0a4a4e), near: 2, far: 70 };
 let underT = 0;                 // 0 水上 ~ 1 水下（0.3s 插值）
 
@@ -151,11 +150,21 @@ function applyShipChoice(id) {
   // 挂船首像（船头 +Z 端水线上方，按船长比例）并应用外观
   const finish = (group, sailSetter, shipLength) => {
     if (figurehead !== 'none') {
-      const fh = buildFigurehead(figurehead);
+      const def = FIGUREHEADS.find((f) => f.id === figurehead);
       const s = shipLength / BASE_LENGTH;
-      fh.scale.setScalar(s);
-      fh.position.set(0, 1.05 * s, shipLength * 0.46);
-      group.add(fh);
+      const mount = (fh) => {
+        fh.scale.multiplyScalar(s);
+        fh.position.set(0, 1.05 * s, shipLength * 0.46);
+        group.add(fh);
+      };
+      if (fancyModel && def && def.model) {
+        // 精致船首像：与船模同一开关，按需加载，失败回退低模
+        loadFigureheadModel(def.model).then((tpl) => {
+          mount(tpl ? tpl.clone(true) : buildFigurehead(figurehead));
+        });
+      } else {
+        mount(buildFigurehead(figurehead));
+      }
     }
     player.setVisual(group, sailSetter);
     player.setSailAmount(Math.max(0, sailAmount));
@@ -276,15 +285,23 @@ function initCustomizeUI() {
     applyShipChoice(selectedShipId);
   });
 
-  document.querySelectorAll('.fh-btn').forEach((b) => {
-    b.classList.toggle('selected', b.dataset.fh === figurehead);
+  // 船首像按钮组：按注册表动态生成（含新增精致模型项）
+  const fhGroup = $('fh-group');
+  if (!FIGUREHEADS.some((f) => f.id === figurehead)) figurehead = 'none'; // 键值校验
+  fhGroup.innerHTML = '';
+  for (const f of FIGUREHEADS) {
+    const b = document.createElement('button');
+    b.className = 'fh-btn' + (f.id === figurehead ? ' selected' : '');
+    b.dataset.fh = f.id;
+    b.textContent = f.cn;
     b.addEventListener('click', () => {
-      figurehead = b.dataset.fh;
+      figurehead = f.id;
       sessionStorage.setItem(KEY_FIGUREHEAD, figurehead);
-      document.querySelectorAll('.fh-btn').forEach((x) => x.classList.toggle('selected', x === b));
+      fhGroup.querySelectorAll('.fh-btn').forEach((x) => x.classList.toggle('selected', x === b));
       applyShipChoice(selectedShipId);
     });
-  });
+    fhGroup.appendChild(b);
+  }
 }
 
 // ===== 游戏状态 =====
@@ -316,7 +333,8 @@ function updateHUD() {
   $('kills').textContent = kills;
   $('loot').textContent = loot;
   $('wave').textContent = fleet.wave;
-  $('weather-icon').textContent = weather.target > 0.5 ? '⛈️' : '☀️';
+  $('weather-icon').textContent = weather.icon;
+  $('weather-stat').title = `天气：${weather.name}（点击切换）`;
   $('sail-state').textContent = sailAmount < 0
     ? `帆位：倒车 ${Math.round(-sailAmount * 100)}%（W 复位）`
     : `帆位：${Math.round(sailAmount * 100)}%（按住 W/S 调整）`;
@@ -353,10 +371,10 @@ $('mute-btn').addEventListener('click', () => {
 applyQuality(quality);
 syncMuteBtn(audio.muted);
 
-// 天气图标点击手动切换（重置自动计时器）；过渡需 ~45s，给即时反馈避免误以为没点上
+// 天气图标点击循环切换（晴→多云→黄昏→夜→雾→风暴，重置自动计时器）
 $('weather-stat').addEventListener('click', () => {
   weather.toggle();
-  floatText(weather.target > 0.5 ? '⛈️ 风暴逼近…' : '☀️ 天气转晴…');
+  floatText(`${weather.icon} ${weather.name}…`);
 });
 // 相机模式点击循环切换（快捷键 1/2/3 保留）
 $('cam-stat').addEventListener('click', () => setCamMode((camMode % 3) + 1));
@@ -954,8 +972,8 @@ function updateUnderwater(dt, time) {
   underT += (target - underT) * Math.min(1, dt / 0.3);
   if (scene.fog) {
     scene.fog.color.lerpColors(weather.fogColor, UNDER_FOG.color, underT); // 水上面跟随天气
-    scene.fog.near = THREE.MathUtils.lerp(SURFACE_FOG.near, UNDER_FOG.near, underT);
-    scene.fog.far = THREE.MathUtils.lerp(SURFACE_FOG.far, UNDER_FOG.far, underT);
+    scene.fog.near = THREE.MathUtils.lerp(weather.fogNear, UNDER_FOG.near, underT);
+    scene.fog.far = THREE.MathUtils.lerp(weather.fogFar, UNDER_FOG.far, underT);
   }
   $('uw-overlay').style.opacity = (underT * 0.85).toFixed(3);
   // TODO(音频): 此处可用 underT 驱动环境音低通滤波实现闷化（已通过 setEnvironment 接入）
@@ -1080,8 +1098,7 @@ renderer.setAnimationLoop(() => {
       asternHoldT = 0;
     }
 
-    const weatherSpeedMul = 1 - weather.strength * 0.25; // 雨天全船减速（玩家）
-    const targetSpeed = sailAmount * player.maxSpeed * weatherSpeedMul * player.speedMul;
+    const targetSpeed = sailAmount * player.maxSpeed * weather.speedMul * player.speedMul; // 天气+debuff 双乘区
     player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
     let turn = 0;
     if (keys['KeyA']) turn -= 1;
@@ -1110,7 +1127,7 @@ renderer.setAnimationLoop(() => {
 
   // 实体更新
   player.update(dt, time, getWaveHeight);
-  fleet.weatherStrength = weather.strength; // 雨天全船减速（敌船）
+  fleet.weatherSpeedMul = weather.speedMul; // 天气全船减速（敌船）
   fleet.update(dt, time, player, getWaveHeight, fleetHooks);
   wakes.update(dt, time, [player, ...fleet.enemies]);
   resolveShipCollisions();
