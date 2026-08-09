@@ -120,6 +120,7 @@ const fragmentShader = /* glsl */ `
   uniform float uCloudAmount;  // 云影强度（晴天淡、风暴浓）
   uniform float uDetailWaves;  // 细节小波数量上限（画质档位）
   uniform float uDaylight;     // 昼夜因子（0 夜 ~ 1 昼，daytime.js 写入）
+  uniform float uLightElev;    // 主导光源仰角（daytime.js 写入，驱动光路形态）
 
   ${SKY_GLSL}
 
@@ -190,20 +191,22 @@ const fragmentShader = /* glsl */ `
     col += uSSSColor * sss * 0.55 * uDaylight; // 夜晚透光减弱
 
     // ---- 日月光路：各向异性高光（宽高光带 + 噪声调制的窄闪点 glitter） ----
-    // 法线扰动在"光源方位"方向保持、垂直方向放大 3 倍粗糙度（Cox-Munk 近似），
-    // 高光沿太阳/月亮方位拉成朝观察者延伸的带状光路
+    // 法线扰动在"光源方位"方向保持、垂直方向放大粗糙度（Cox-Munk 近似），
+    // 高光沿光源方位拉成朝观察者延伸的带状光路；低仰角时拉伸比 3→6、颜色更深更暖
     vec3 h = normalize(uSunDir + v);
     vec2 sunAz = normalize(uSunDir.xz + vec2(1e-4, 0.0));
     vec2 perpAz = vec2(-sunAz.y, sunAz.x);
+    float lowElev = 1.0 - smoothstep(0.05, 0.4, uLightElev);
     float nAlong = dot(n.xz, sunAz);
-    float nAcross = dot(n.xz, perpAz) * 3.0;
+    float nAcross = dot(n.xz, perpAz) * (3.0 + 3.0 * lowElev);
     vec3 na = normalize(vec3(sunAz.x * nAlong + perpAz.x * nAcross, n.y, sunAz.y * nAlong + perpAz.y * nAcross));
     float ndh = max(dot(na, h), 0.0);
     float lightLv = 0.35 + 0.65 * uDaylight; // 夜晚月光光路略弱；min() 防正午曝白
-    col += uSunColor * min(pow(ndh, 260.0) * 1.2, 1.4) * lightLv;
+    vec3 specCol = uSunColor * mix(vec3(1.0), vec3(1.25, 0.95, 0.7), lowElev); // 低仰角更饱和偏暖
+    col += specCol * min(pow(ndh, 260.0) * 1.2, 1.4) * lightLv;
     float g = vnoise(vWorldPos.xz * 22.0 + vec2(uTime * 1.8, -uTime * 1.3));
-    float glitter = pow(ndh, 520.0) * smoothstep(0.55, 0.95, g);
-    col += uSunColor * min(glitter * 3.0, 2.0) * (0.3 + 0.7 * detailFade) * (0.15 + 0.85 * uDaylight);
+    float glitter = pow(ndh, 520.0) * smoothstep(0.55, 0.95, g) * (1.0 + 0.5 * lowElev);
+    col += specCol * min(glitter * 3.0, 2.0) * (0.3 + 0.7 * detailFade) * (0.15 + 0.85 * uDaylight);
 
     // ---- 破浪白沫：雅可比 + 波高阈值，噪声打散边缘，波谷渐隐 ----
     float foamN = vnoise(vWorldPos.xz * 2.3 + vec2(uTime * 0.12, -uTime * 0.09));
@@ -247,6 +250,7 @@ export function createWater(sunDir, islands = []) {
       uCloudAmount: { value: 0.15 },
       uDetailWaves: { value: 10 },
       uDaylight: { value: 1 },
+      uLightElev: { value: 0.5 },
       uDeepColor: { value: new THREE.Color(0x0b3b5e) },
       uShallowColor: { value: new THREE.Color(0x1e9e9a) },
       uSSSColor: { value: new THREE.Color(0x35d0b0) },

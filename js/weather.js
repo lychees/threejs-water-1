@@ -158,7 +158,7 @@ export class Weather {
     this.skyUniforms.uZenith.value.lerpColors(day.zenith, GRAY, p.grayT * 0.7);
     this.skyUniforms.uHorizon.value.lerpColors(day.horizon, GRAY, p.grayT * 0.7);
     this.skyUniforms.uSunColor.value.copy(day.sunColor);
-    this.waterUniforms.uSunColor.value.copy(day.sunColor);
+    // 注意：水面 uSunColor 由 daytime 写入（日月混合光源色），此处不覆盖
     // 雾：颜色灰化 + 距离乘区
     this.fogColor.lerpColors(day.horizon, GRAY, p.grayT * 0.8);
     this.fogNearV = day.fogNear * p.fogMul;
