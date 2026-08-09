@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { createWater, getWaveHeight } from './water.js';
 import { createSky, SUN_DIR } from './sky.js';
-import { Ship } from './ship.js';
+import { Ship, DEBUFF_DEFS } from './ship.js';
 import { Combat } from './combat.js';
 import { EnemyFleet } from './enemy.js';
 import { loadShipModel, instantiateShip, SHIP_MODELS, BASE_LENGTH } from './modelship.js';
@@ -71,7 +71,12 @@ function applyQuality(q) {
 }
 
 // ===== 操控与氛围参数 =====
-const ASTERN_SPEED_RATIO = 0.3; // 倒退档速度 = 极速 × 30%
+const ASTERN_MAX = 0.3;         // 倒车最大帆量幅度（负帆量，即极速的 30%）
+const SAIL_RATE = 1 / 2.5;      // 帆量每秒变化（0 → 满帆约 2.5s）
+const ASTERN_HOLD = 0.4;        // 帆量降到 0 后 S 继续按住进入倒车的延迟
+const CHARGE_TIME = 1.2;        // 火炮蓄力满所需秒数
+const BOW_RELOAD = 2.0;         // 艏炮独立冷却
+const BOW_SPEED = 36;           // 艏炮初速（比舷炮略高，弹道平直）
 const RUDDER_CURVE = 1.5;       // 舵效 ∝ (航速/极速)^RUDDER_CURVE（舵是翼面）
 const RUDDER_MIN_EFF = 0.05;    // 静止时的残存舵效
 const CAM_MAX_DIP = 6.0;        // 相机允许没入波面下的最大深度（不穿海底的底线）
@@ -152,7 +157,7 @@ function applyShipChoice(id) {
       group.add(fh);
     }
     player.setVisual(group, sailSetter);
-    player.setSailAmount(sailLevel / 3);
+    player.setSailAmount(Math.max(0, sailAmount));
   };
 
   if (useModel) {
@@ -285,16 +290,31 @@ function initCustomizeUI() {
 let state = 'menu'; // menu | playing | over
 let kills = 0;
 let loot = 0;               // 战利品（宝箱）计数
-let sailLevel = 0;              // 0 降帆 ~ 3 满帆
+let sailAmount = 0;             // 帆量连续值：-ASTERN_MAX(倒车) ~ 1(满帆)
+let asternHoldT = 0;            // S 按住且帆量为 0 的持续时间（超 ASTERN_HOLD 进入倒车）
 const RELOAD_TIME = 3.2;
 let cooldownL = 0;
 let cooldownR = 0;
+let cooldownBow = 0;            // 艏炮独立冷却
+let chargeL = null;             // 蓄力进度秒数（null = 未按住），左/右/艏各一
+let chargeR = null;
+let chargeBow = null;
 let gameOverT = 0;
 
 // ===== HUD =====
 const $ = (id) => document.getElementById(id);
 const hud = $('hud');
-const SAIL_NAMES = ['降帆', '半帆', '大半帆', '满帆'];
+
+// 装填条：蓄力中显示蓄力进度（金色高亮），否则显示装填进度
+function setReloadBar(el, cooldown, charge, cooldownMax) {
+  if (charge !== null) {
+    el.classList.add('charging');
+    el.style.width = `${Math.min(1, charge / CHARGE_TIME) * 100}%`;
+  } else {
+    el.classList.remove('charging');
+    el.style.width = `${(1 - cooldown / cooldownMax) * 100}%`;
+  }
+}
 
 function updateHUD() {
   $('hp-fill').style.width = `${(player.hp / player.maxHp) * 100}%`;
@@ -302,14 +322,19 @@ function updateHUD() {
   $('loot').textContent = loot;
   $('wave').textContent = fleet.wave;
   $('weather-icon').textContent = weather.target > 0.5 ? '⛈️' : '☀️';
-  $('sail-state').textContent = sailLevel < 0
-    ? '帆位：倒车（W 复位升帆）'
-    : `帆位：${SAIL_NAMES[sailLevel]}（W 升帆 / S 降帆）`;
-  $('reload-l').style.width = `${(1 - cooldownL / RELOAD_TIME) * 100}%`;
-  $('reload-r').style.width = `${(1 - cooldownR / RELOAD_TIME) * 100}%`;
+  $('sail-state').textContent = sailAmount < 0
+    ? `帆位：倒车 ${Math.round(-sailAmount * 100)}%（W 复位）`
+    : `帆位：${Math.round(sailAmount * 100)}%（按住 W/S 调整）`;
+  setReloadBar($('reload-l'), cooldownL, chargeL, RELOAD_TIME);
+  setReloadBar($('reload-r'), cooldownR, chargeR, RELOAD_TIME);
+  setReloadBar($('reload-b'), cooldownBow, chargeBow, BOW_RELOAD);
+  // 玩家 debuff 图标（带剩余秒数）
+  $('debuff-fire').textContent = player.debuff.fire > 0 ? `🔥 ${Math.ceil(player.debuff.fire)}s` : '';
+  $('debuff-leak').textContent = player.debuff.leak > 0 ? `💧 ${Math.ceil(player.debuff.leak)}s` : '';
+  $('debuff-sail').textContent = player.debuff.sail > 0 ? `⛵ ${Math.ceil(player.debuff.sail)}s` : '';
 }
 
-// 初始化选船界面并应用上次选择（需在 $ / sailLevel 声明之后调用）
+// 初始化选船界面并应用上次选择（需在 $ / sailAmount 声明之后调用）
 loadShipStats().then(() => {
   buildShipCards();
   initCustomizeUI();
@@ -338,6 +363,8 @@ $('weather-stat').addEventListener('click', () => {
   weather.toggle();
   floatText(weather.target > 0.5 ? '⛈️ 风暴逼近…' : '☀️ 天气转晴…');
 });
+// 相机模式点击循环切换（快捷键 1/2/3 保留）
+$('cam-stat').addEventListener('click', () => setCamMode((camMode % 3) + 1));
 
 // ===== 小地图（2D canvas 海图，隔帧绘制 ~15fps） =====
 const minimap = $('minimap');
@@ -446,10 +473,12 @@ let touchTurn = 0; // 摇杆横轴转向输入（-1 ~ 1）
     if (len > r) { dx = (dx / len) * r; dy = (dy / len) * r; }
     knob.style.transform = `translate(${dx}px, ${dy}px)`;
     touchTurn = dx / r; // 右转为正
-    // 纵轴映射帆位：上推升档（0~3），下推到底倒车（-1），回中降帆
+    // 纵轴直接映射连续帆量：上推幅度 = 帆量，下推到底进入倒车，回中保持当前值
     const fy = dy / r;
-    const level = fy < -0.2 ? Math.min(3, Math.round(-fy * 3)) : fy > 0.35 ? -1 : 0;
-    if (level !== sailLevel && state === 'playing' && camMode !== 3) setSail(level);
+    if (state === 'playing' && camMode !== 3) {
+      if (fy < -0.15) setSail(Math.min(1, -fy * 1.1));
+      else if (fy > 0.55) setSail(-((fy - 0.55) / 0.45) * ASTERN_MAX);
+    }
   }
 
   joy.addEventListener('touchstart', (e) => {
@@ -473,8 +502,11 @@ let touchTurn = 0; // 摇杆横轴转向输入（-1 ~ 1）
   joy.addEventListener('touchend', joyEnd);
   joy.addEventListener('touchcancel', joyEnd);
 
-  $('fire-l').addEventListener('touchstart', (e) => { e.preventDefault(); fire(-1); }, { passive: false });
-  $('fire-r').addEventListener('touchstart', (e) => { e.preventDefault(); fire(1); }, { passive: false });
+  // 触屏舷炮按钮：同样按住蓄力、松开发射
+  $('fire-l').addEventListener('touchstart', (e) => { e.preventDefault(); startCharge('L'); }, { passive: false });
+  $('fire-l').addEventListener('touchend', (e) => { e.preventDefault(); releaseCharge('L'); }, { passive: false });
+  $('fire-r').addEventListener('touchstart', (e) => { e.preventDefault(); startCharge('R'); }, { passive: false });
+  $('fire-r').addEventListener('touchend', (e) => { e.preventDefault(); releaseCharge('R'); }, { passive: false });
 })();
 
 // ===== 拾取飘字 =====
@@ -509,16 +541,21 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Digit2') { setCamMode(2); return; }
   if (e.code === 'Digit3') { setCamMode(3); return; }
   if (state !== 'playing') return;
-  if (camMode !== 3) { // 飞行模式下船的键盘操控失效，保持当前帆位直行
-    if (e.code === 'KeyW') setSail(Math.min(3, sailLevel + 1));
-    if (e.code === 'KeyS') setSail(Math.max(-1, sailLevel - 1)); // 停船后继续降帆进入倒退档
+  // 帆位连续化：W/S 在主循环里按按住时长处理，此处不响应离散按键
+  if (!e.repeat) {
+    if (e.code === 'KeyQ') startCharge('L');
+    if (e.code === 'KeyE') startCharge('R');
+    if (e.code === 'Space') { e.preventDefault(); startCharge('bow'); }
   }
-  if (e.code === 'KeyQ') fire(-1);
-  if (e.code === 'KeyE') fire(1);
 });
-window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+window.addEventListener('keyup', (e) => {
+  keys[e.code] = false;
+  if (e.code === 'KeyQ') releaseCharge('L');
+  if (e.code === 'KeyE') releaseCharge('R');
+  if (e.code === 'Space') releaseCharge('bow');
+});
 
-// 鼠标：模式1 移动环视 + 点击齐射；模式2/3 拖拽转视角（齐射用 Q/E）
+// 鼠标：模式1 移动环视 + 按住蓄力齐射；模式2/3 拖拽转视角（齐射用 Q/E）
 let mouseNX = 0; // -0.5 ~ 0.5
 let mouseNY = 0;
 let dragging = false;
@@ -544,31 +581,66 @@ window.addEventListener('mousemove', (e) => {
 window.addEventListener('mousedown', (e) => {
   if (state !== 'playing') return;
   if (camMode === 1) {
-    if (e.button === 0) fire(-1);
-    if (e.button === 2) fire(1);
+    if (e.button === 0) startCharge('L');
+    if (e.button === 2) startCharge('R');
   } else if (e.button === 0) {
     dragging = true;
   }
 });
-window.addEventListener('mouseup', () => { dragging = false; });
+window.addEventListener('mouseup', (e) => {
+  dragging = false;
+  if (e.button === 0) releaseCharge('L');
+  if (e.button === 2) releaseCharge('R');
+});
 window.addEventListener('wheel', (e) => {
   if (camMode === 2) orbitDist = THREE.MathUtils.clamp(orbitDist + e.deltaY * 0.02, 6, 40);
 }, { passive: true });
 window.addEventListener('contextmenu', (e) => e.preventDefault());
 
-function setSail(level) {
-  sailLevel = level;
-  player.setSailAmount(Math.max(0, level) / 3); // 倒退档时帆面按收帆显示
+// 帆位连续设置（倒车为负值；破帆时上限被压低）
+function setSail(v) {
+  sailAmount = THREE.MathUtils.clamp(v, -ASTERN_MAX, player.sailCap);
+  player.setSailAmount(Math.max(0, sailAmount)); // 倒车时帆面按收帆显示
 }
 
-function fire(side) {
+// ===== 火炮蓄力：按住蓄力、松开发射；冷却未结束时按住不开始蓄力 =====
+function startCharge(which) {
+  if (state !== 'playing' || player.sinking) return;
+  if (which === 'L' && cooldownL <= 0 && chargeL === null) chargeL = 0;
+  if (which === 'R' && cooldownR <= 0 && chargeR === null) chargeR = 0;
+  if (which === 'bow' && cooldownBow <= 0 && chargeBow === null) chargeBow = 0;
+}
+
+function releaseCharge(which) {
+  if (which === 'L' && chargeL !== null) { fireCharged(-1, chargeL / CHARGE_TIME); chargeL = null; }
+  if (which === 'R' && chargeR !== null) { fireCharged(1, chargeR / CHARGE_TIME); chargeR = null; }
+  if (which === 'bow' && chargeBow !== null) { fireBow(chargeBow / CHARGE_TIME); chargeBow = null; }
+}
+
+function fireCharged(side, power) {
   if (player.sinking) return;
-  if (side < 0 && cooldownL > 0) return;
-  if (side > 0 && cooldownR > 0) return;
-  combat.fireBroadside(player, side, { speed: 30, spread: 0.05, fromPlayer: true }); // 炮数取 ship.cannons
+  const p = Math.min(1, power);
+  combat.fireBroadside(player, side, {
+    speed: 30 * (0.6 + 0.9 * p),        // 初速/射程随蓄力
+    spread: 0.05,
+    fromPlayer: true,                    // 炮数取 ship.cannons
+    damageMul: 0.7 + 0.8 * p,            // 伤害随蓄力
+  });
   audio.cannon();
   if (side < 0) cooldownL = RELOAD_TIME;
   else cooldownR = RELOAD_TIME;
+}
+
+// 艏炮：单发、弹道平直；小船（炮数 ≤2）伤害 ×1.5 补偿
+function fireBow(power) {
+  if (player.sinking) return;
+  const p = Math.min(1, power);
+  combat.fireBowShot(player, {
+    speed: BOW_SPEED * (0.6 + 0.9 * p),
+    damageMul: (0.7 + 0.8 * p) * (player.cannons <= 2 ? 1.5 : 1),
+  });
+  audio.cannon();
+  cooldownBow = BOW_RELOAD;
 }
 
 // ===== 开始 / 结束 / 重开 =====
@@ -578,7 +650,7 @@ function begin() {
   state = 'playing';
   audio.init(); // AudioContext 需在用户交互后创建
   syncMuteBtn(audio.muted);
-  setSail(2);
+  setSail(0.6); // 出航初始 60% 帆
   fleet.spawnOne(player.position);
   fleet.spawnOne(player.position);
 }
@@ -603,12 +675,35 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-// ===== 命中回调 =====
+// ===== 命中回调：伤害 ×蓄力系数，并按概率给目标挂 debuff =====
 function onHit(ball, target) {
-  const dmg = target.isPlayer ? 12 : 20;
+  const base = target.isPlayer ? 12 : 20;
+  const dmg = base * (ball.damageMul ?? 1);
   audio.hit();
   const sunk = target.ship.takeDamage(dmg);
+  if (!sunk) {
+    for (const key of target.ship.rollDebuffs()) {
+      // 敌船中 debuff：头上飘字；玩家中 debuff：HUD 图标表达（updateHUD）
+      if (!target.isPlayer) floatTextAt(`敌船${DEBUFF_DEFS[key].label}！`, target.ship.position);
+    }
+  }
   if (sunk && target.isPlayer) gameOver();
+}
+
+// 世界坐标 → 屏幕位置飘字（敌船头顶）
+function floatTextAt(msg, worldPos) {
+  const v = worldPos.clone();
+  v.y += 4;
+  v.project(camera);
+  if (v.z > 1) { floatText(msg); return; } // 在镜头后方则退回中央飘字
+  const el = document.createElement('div');
+  el.className = 'float-text';
+  el.textContent = msg;
+  el.style.left = `${(v.x * 0.5 + 0.5) * 100}%`;
+  el.style.top = `${(-v.y * 0.5 + 0.5) * 100}%`;
+  el.style.bottom = 'auto';
+  hud.appendChild(el);
+  setTimeout(() => el.remove(), 1500);
 }
 
 const fleetHooks = {
@@ -655,7 +750,7 @@ function setCamMode(m) {
 
 function updateHelp() {
   const tips = {
-    1: 'W/S 升降帆调速 · A/D 转向 · 移动鼠标环视 · 左键/Q 左舷齐射 · 右键/E 右舷齐射 · 1/2/3 相机',
+    1: '按住 W/S 调帆 · A/D 转向 · 按住 左键/Q 右键/E 蓄力齐射 · 空格艏炮 · 1/2/3 相机',
     2: '拖拽旋转 · 滚轮缩放 · Q/E 齐射 · 按 1 返回跟随',
     3: '拖拽转向 · WASD 平移 · Q/E 升降 · 船保持帆位直行 · 按 1 返回跟随',
   };
@@ -751,31 +846,47 @@ renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   time += dt;
 
-  // 玩家操控（风暴时极速 ×0.9、操控略钝；飞行模式下舵效输入失效）
-  if (state === 'playing' && !player.sinking) {
-    const weatherSpeedMul = 1 - weather.strength * 0.1;
-    // 倒退档：sailLevel = -1，缓慢倒车
-    const targetSpeed = (sailLevel >= 0
-      ? (sailLevel / 3) * player.maxSpeed
-      : -ASTERN_SPEED_RATIO * player.maxSpeed) * weatherSpeedMul;
-    player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
-    if (camMode !== 3) {
-      let turn = 0;
-      if (keys['KeyA']) turn -= 1;
-      if (keys['KeyD']) turn += 1;
-      turn += touchTurn; // 触屏摇杆转向
-      // 舵是翼面：舵效 ∝ 航速（低速几乎转不动），倒车时舵效反向
-      const speedRatio = Math.min(1, Math.abs(player.speed) / player.maxSpeed);
-      const rudderEff = RUDDER_MIN_EFF + (1 - RUDDER_MIN_EFF) * Math.pow(speedRatio, RUDDER_CURVE);
-      const rudderDir = player.speed < -0.3 ? -1 : 1;
-      const weatherTurnMul = 1 - weather.strength * 0.15;
-      player.heading += turn * player.turnRate * rudderEff * rudderDir * weatherTurnMul * dt;
+  // 玩家操控（风暴时极速 ×0.9、操控略钝；飞行模式下船的操控失效保持直行）
+  if (state === 'playing' && !player.sinking && camMode !== 3) {
+    // 帆位连续化：按住 W 匀速升帆 / S 匀速降帆；降到 0 后 S 再按 ASTERN_HOLD 秒进入倒车
+    if (keys['KeyW']) {
+      asternHoldT = 0;
+      setSail(sailAmount + dt * SAIL_RATE);
+    } else if (keys['KeyS']) {
+      if (sailAmount > 0) {
+        setSail(sailAmount - dt * SAIL_RATE);
+      } else {
+        asternHoldT += dt;
+        if (asternHoldT > ASTERN_HOLD) setSail(sailAmount - dt * SAIL_RATE);
+      }
+    } else {
+      asternHoldT = 0;
     }
+
+    const weatherSpeedMul = 1 - weather.strength * 0.1;
+    const targetSpeed = sailAmount * player.maxSpeed * weatherSpeedMul * player.speedMul;
+    player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
+    let turn = 0;
+    if (keys['KeyA']) turn -= 1;
+    if (keys['KeyD']) turn += 1;
+    turn += touchTurn; // 触屏摇杆转向
+    // 舵是翼面：舵效 ∝ 航速（低速几乎转不动），倒车时舵效反向
+    const speedRatio = Math.min(1, Math.abs(player.speed) / player.maxSpeed);
+    const rudderEff = RUDDER_MIN_EFF + (1 - RUDDER_MIN_EFF) * Math.pow(speedRatio, RUDDER_CURVE);
+    const rudderDir = player.speed < -0.3 ? -1 : 1;
+    const weatherTurnMul = 1 - weather.strength * 0.15;
+    player.heading += turn * player.turnRate * rudderEff * rudderDir * weatherTurnMul * dt;
   }
+
+  // 蓄力进度推进
+  if (chargeL !== null) chargeL += dt;
+  if (chargeR !== null) chargeR += dt;
+  if (chargeBow !== null) chargeBow += dt;
 
   // 冷却
   cooldownL = Math.max(0, cooldownL - dt);
   cooldownR = Math.max(0, cooldownR - dt);
+  cooldownBow = Math.max(0, cooldownBow - dt);
 
   // 实体更新
   player.update(dt, time, getWaveHeight);
@@ -803,6 +914,25 @@ renderer.setAnimationLoop(() => {
       pos.z += (Math.random() - 0.5) * 4;
       pos.y = getWaveHeight(pos.x, pos.z, time);
       combat.bubbles(pos);
+    }
+  }
+
+  // debuff 粒子：着火冒火焰、漏水舷侧冒水花
+  for (const s of [player, ...fleet.enemies]) {
+    if (s.sinking || s.dead) continue;
+    if (s.debuff.fire > 0 && Math.random() < dt * 10) {
+      const pos = s.position.clone();
+      pos.x += (Math.random() - 0.5) * 2;
+      pos.z += (Math.random() - 0.5) * 2;
+      pos.y += 1.5;
+      combat.firePuff(pos);
+    }
+    if (s.debuff.leak > 0 && Math.random() < dt * 1.5) {
+      const pos = s.position.clone();
+      pos.x += (Math.random() - 0.5) * 3;
+      pos.z += (Math.random() - 0.5) * 3;
+      pos.y = getWaveHeight(pos.x, pos.z, time) + 0.1;
+      combat.splash(pos);
     }
   }
 

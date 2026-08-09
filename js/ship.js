@@ -3,6 +3,13 @@ import * as THREE from 'three';
 
 const WORLD_LIMIT = 430; // 活动范围半径，超出会被挡回
 
+// 命中 debuff 数值表（独立判定，重复触发刷新时间，沉船时清除）
+export const DEBUFF_DEFS = {
+  fire: { chance: 0.15, duration: 8, dps: 2, label: '着火' },                       // 持续掉血
+  leak: { chance: 0.15, duration: 20, speedMul: 0.7, damageTakenMul: 1.25, label: '漏水' }, // 减速+易伤
+  sail: { chance: 0.2, duration: 15, maxSail: 0.5, speedMul: 0.6, label: '破帆' },  // 帆量上限+减速
+};
+
 // 构建一艘帆船（前进方向为本地 +z），返回 Group；也是真实模型加载失败时的回退外观
 export function buildShipModel({ hullColor, sailColor }) {
   const group = new THREE.Group();
@@ -140,6 +147,33 @@ export class Ship {
     this.sinkT = 0;
     this.sinkDir = 1;
     this.dead = false;  // 沉船动画播完，可移除
+
+    this.debuff = { fire: 0, leak: 0, sail: 0 }; // 各 debuff 剩余秒数
+  }
+
+  // 速度乘区（漏水 ×0.7、破帆 ×0.6，乘法叠加）
+  get speedMul() {
+    let m = 1;
+    if (this.debuff.leak > 0) m *= DEBUFF_DEFS.leak.speedMul;
+    if (this.debuff.sail > 0) m *= DEBUFF_DEFS.sail.speedMul;
+    return m;
+  }
+
+  // 帆量上限（破帆时压到 50%）
+  get sailCap() {
+    return this.debuff.sail > 0 ? DEBUFF_DEFS.sail.maxSail : 1;
+  }
+
+  // 命中后按概率独立判定 debuff，返回本次触发的 key 列表
+  rollDebuffs() {
+    const applied = [];
+    for (const [key, def] of Object.entries(DEBUFF_DEFS)) {
+      if (Math.random() < def.chance) {
+        this.debuff[key] = def.duration; // 重复触发刷新时间
+        applied.push(key);
+      }
+    }
+    return applied;
   }
 
   // 热替换外观（真实模型加载完成后换掉程序化船），运动/浮力逻辑不受影响
@@ -163,10 +197,12 @@ export class Ship {
     this.sinking = true;
     this.sinkT = 0;
     this.sinkDir = Math.random() < 0.5 ? 1 : -1;
+    this.debuff.fire = this.debuff.leak = this.debuff.sail = 0; // 沉船清除 debuff
   }
 
   takeDamage(dmg) {
     if (this.sinking) return false;
+    if (this.debuff.leak > 0) dmg *= DEBUFF_DEFS.leak.damageTakenMul; // 漏水易伤
     this.hp -= dmg;
     if (this.hp <= 0) {
       this.hp = 0;
@@ -190,6 +226,19 @@ export class Ship {
       if (this.sinkT > 5) this.dead = true;
       return;
     }
+
+    // ---- debuff 计时（着火持续掉血，可致命） ----
+    if (this.debuff.fire > 0) {
+      this.debuff.fire -= dt;
+      this.hp -= DEBUFF_DEFS.fire.dps * dt;
+      if (this.hp <= 0) {
+        this.hp = 0;
+        this.startSinking();
+        return;
+      }
+    }
+    if (this.debuff.leak > 0) this.debuff.leak -= dt;
+    if (this.debuff.sail > 0) this.debuff.sail -= dt;
 
     // ---- 浮力：采样船头/船尾/左舷/右舷四点波高（随船长缩放） ----
     const ls = this.lengthScale;

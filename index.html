@@ -20,6 +20,8 @@
   .bar > div { height: 100%; transition: width .15s; }
   #hp-fill { width: 100%; background: linear-gradient(90deg, #e74c3c, #2ecc71); }
   #sail-state { margin-top: 8px; font-size: 14px; }
+  #debuffs { margin-top: 6px; min-height: 20px; display: flex; gap: 10px; font-size: 15px; }
+  .reload-bar > div.charging { background: linear-gradient(90deg, #f1c40f, #ffe89e); box-shadow: 0 0 6px rgba(241,196,15,.8); }
 
   #reload-wrap { position: absolute; right: 24px; bottom: 24px; width: 220px; text-align: right; }
   .reload-row { margin-top: 6px; font-size: 14px; }
@@ -42,8 +44,8 @@
   /* ===== HUD 小按钮 ===== */
   .hud-btn { pointer-events: auto; cursor: pointer; color: #fff; font-size: 15px; font-weight: bold; font-family: inherit; }
   .hud-btn:hover { border-color: #e8a33d; }
-  #weather-stat { pointer-events: auto; cursor: pointer; }
-  #weather-stat:hover { border-color: #e8a33d; }
+  #weather-stat, #cam-stat { pointer-events: auto; cursor: pointer; }
+  #weather-stat:hover, #cam-stat:hover { border-color: #e8a33d; }
 
   /* ===== 小地图 ===== */
   #minimap { position: absolute; top: 16px; right: 20px; width: 180px; height: 180px; border-radius: 50%; border: 2.5px solid rgba(232,163,61,.75); box-shadow: 0 0 12px rgba(0,0,0,.5); pointer-events: auto; cursor: pointer; }
@@ -112,7 +114,7 @@
     <div class="stat">战利品 <span id="loot">0</span></div>
     <div class="stat">第 <span id="wave">1</span> 波</div>
     <div class="stat" id="weather-stat" title="点击切换天气">天气 <span id="weather-icon">☀️</span></div>
-    <div class="stat">相机 <span id="cam-mode">跟随</span></div>
+    <div class="stat" id="cam-stat" title="点击切换相机模式">相机 <span id="cam-mode">跟随</span></div>
     <button id="quality-btn" class="stat hud-btn">画质：高</button>
     <button id="mute-btn" class="stat hud-btn">🔊</button>
   </div>
@@ -120,11 +122,13 @@
   <div id="hp-wrap">
     <div class="bar-label">船体耐久</div>
     <div class="bar"><div id="hp-fill"></div></div>
-    <div id="sail-state">帆位：降帆</div>
+    <div id="debuffs"><span id="debuff-fire"></span><span id="debuff-leak"></span><span id="debuff-sail"></span></div>
+    <div id="sail-state">帆位：0%</div>
   </div>
   <div id="reload-wrap">
-    <div class="reload-row">左舷（鼠标左键 / Q）<div class="reload-bar"><div id="reload-l"></div></div></div>
-    <div class="reload-row">右舷（鼠标右键 / E）<div class="reload-bar"><div id="reload-r"></div></div></div>
+    <div class="reload-row">左舷（按住左键 / Q 蓄力）<div class="reload-bar"><div id="reload-l"></div></div></div>
+    <div class="reload-row">右舷（按住右键 / E 蓄力）<div class="reload-bar"><div id="reload-r"></div></div></div>
+    <div class="reload-row">艏炮（按住空格蓄力）<div class="reload-bar"><div id="reload-b"></div></div></div>
   </div>
   <div id="help">W/S 升降帆调速 · A/D 转向 · 移动鼠标环视 · 左键/Q 左舷齐射 · 右键/E 右舷齐射 · 1/2/3 相机</div>
 </div>

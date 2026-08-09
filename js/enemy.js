@@ -103,7 +103,7 @@ export class EnemyFleet {
         desired = angleToP + e.orbitDir * Math.PI * 0.5;
       }
       e.turnToward(desired, dt);
-      const targetSpeed = dist > 20 ? e.maxSpeed : e.maxSpeed * 0.55;
+      const targetSpeed = dist > 20 ? e.maxSpeed * e.speedMul : e.maxSpeed * e.speedMul * 0.55;
       e.speed += (targetSpeed - e.speed) * Math.min(1, dt * 1.5);
 
       // 开火：舷侧大致对准玩家且进入射程

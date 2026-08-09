@@ -107,7 +107,7 @@ export class Combat {
    * @param {number} side -1 左舷 / +1 右舷
    */
   fireBroadside(ship, side, opts = {}) {
-    const { count = ship.cannons ?? 3, speed = 30, spread = 0.06, fromPlayer = true } = opts;
+    const { count = ship.cannons ?? 3, speed = 30, spread = 0.06, fromPlayer = true, damageMul = 1 } = opts;
     // 舷侧方向：右舷 = (cos h, 0, -sin h)
     const dir = new THREE.Vector3(side * Math.cos(ship.heading), 0, -side * Math.sin(ship.heading));
     const fwd = ship.forward;
@@ -128,13 +128,40 @@ export class Combat {
       const mesh = new THREE.Mesh(this.ballGeo, this.ballMat);
       mesh.position.copy(start);
       this.scene.add(mesh);
-      this.balls.push({ mesh, vel, fromPlayer, life: 6 });
+      this.balls.push({ mesh, vel, fromPlayer, life: 6, damageMul });
 
       // 炮口硝烟
       this.bursts.push(new Burst(this.scene, start, {
         count: this._n(8), color: 0xcccccc, speed: 1.5, up: 1.5, life: 0.9, size: 1.6, gravity: -0.5,
       }));
     }
+  }
+
+  // 艏炮：朝船头单发，弹道平直、初速略高（玩家专用）
+  fireBowShot(ship, opts = {}) {
+    const { speed = 36, damageMul = 1 } = opts;
+    const fwd = ship.forward;
+    const start = ship.position.clone().addScaledVector(fwd, 4.2 * (ship.lengthScale || 1));
+    start.y += 1.4;
+    const vel = fwd.clone().multiplyScalar(speed);
+    vel.y = 2.5; // 上抛小 → 弹道平直
+    const mesh = new THREE.Mesh(this.ballGeo, this.ballMat);
+    mesh.position.copy(start);
+    this.scene.add(mesh);
+    this.balls.push({ mesh, vel, fromPlayer: true, life: 6, damageMul });
+    this.bursts.push(new Burst(this.scene, start, {
+      count: this._n(8), color: 0xcccccc, speed: 1.5, up: 1.5, life: 0.9, size: 1.6, gravity: -0.5,
+    }));
+  }
+
+  // 着火持续火焰（debuff 视觉）
+  firePuff(pos) {
+    this.bursts.push(new Burst(this.scene, pos, {
+      count: this._n(6), color: 0xff7a20, speed: 1.0, up: 3, life: 0.7, size: 1.5, gravity: -3,
+    }));
+    this.bursts.push(new Burst(this.scene, pos, {
+      count: this._n(4), color: 0x444444, speed: 0.8, up: 2, life: 1.2, size: 2.0, gravity: -1,
+    }));
   }
 
   splash(pos) {
