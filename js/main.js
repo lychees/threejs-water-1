@@ -119,9 +119,9 @@ const dayTime = new DayTime({
 // ===== 画质档位（高/中/低，存 sessionStorage） =====
 const QUALITY_KEY = 'waters-quality';
 const QUALITY_LEVELS = {
-  high: { label: '高', pixelRatio: Math.min(window.devicePixelRatio, 2), detailWaves: 10, particleScale: 1, rainDensity: 1, wakeFoam: true },
-  mid:  { label: '中', pixelRatio: 1.25, detailWaves: 6, particleScale: 0.5, rainDensity: 1, wakeFoam: true },
-  low:  { label: '低', pixelRatio: 1, detailWaves: 0, particleScale: 0.5, rainDensity: 0.5, wakeFoam: false },
+  high: { label: '高', pixelRatio: Math.min(window.devicePixelRatio, 2), detailWaves: 3, particleScale: 1, rainDensity: 1, wakeFoam: true },
+  mid:  { label: '中', pixelRatio: 1.25, detailWaves: 2, particleScale: 0.5, rainDensity: 1, wakeFoam: true },
+  low:  { label: '低', pixelRatio: 1, detailWaves: 1, particleScale: 0.5, rainDensity: 0.5, wakeFoam: false },
 };
 let quality = QUALITY_LEVELS[sessionStorage.getItem(QUALITY_KEY)] ? sessionStorage.getItem(QUALITY_KEY) : 'high';
 

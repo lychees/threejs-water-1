@@ -5,15 +5,93 @@ import { SKY_GLSL, SKY_COLORS } from './sky.js';
 // 波形参数表：CPU（浮力）与 GPU（顶点着色器）共用同一份，保证一致
 // dir 会自动归一化；amp 振幅；len 波长；q 波峰尖锐度(0~1)
 const RAW_WAVES = [
-  { dir: [1.00,  0.15], amp: 0.55, len: 60.0, q: 0.45 },
-  { dir: [0.80,  0.60], amp: 0.38, len: 31.0, q: 0.45 },
-  { dir: [-0.50, 0.90], amp: 0.28, len: 18.0, q: 0.40 },
-  { dir: [0.30, -1.00], amp: 0.17, len: 9.0,  q: 0.30 },
-  { dir: [-0.90, -0.40], amp: 0.11, len: 5.5, q: 0.30 },
-  { dir: [0.20,  0.98], amp: 0.07, len: 3.2,  q: 0.20 },
+  // 大洋涌浪：长波长大振幅，撑出海面的大尺度起伏
+  { dir: [0.90, -0.35], amp: 0.50, len: 210.0, q: 0.35 },
+  { dir: [-0.60, 0.80], amp: 0.40, len: 130.0, q: 0.35 },
+  // 主浪
+  { dir: [1.00,  0.15], amp: 0.55, len: 60.0, q: 0.55 },
+  { dir: [0.80,  0.60], amp: 0.38, len: 31.0, q: 0.55 },
+  { dir: [-0.50, 0.90], amp: 0.28, len: 18.0, q: 0.50 },
+  { dir: [0.30, -1.00], amp: 0.17, len: 9.0,  q: 0.40 },
+  { dir: [-0.90, -0.40], amp: 0.11, len: 5.5, q: 0.35 },
+  { dir: [0.20,  0.98], amp: 0.07, len: 3.2,  q: 0.25 },
 ];
 
 const WAVE_COUNT = RAW_WAVES.length;
+
+// ---- 程序化法线贴图：可平铺分形值噪声 → 高度场 → 中心差分转法线（一次性 CPU 生成） ----
+function generateWaterNormalMap(size = 512) {
+  // 分形八度：格子数 ×2 递增，每层独立打乱表；格点按周期环绕 → 贴图可平铺
+  const octaves = [6, 12, 24, 48].map((cells) => {
+    const perm = new Uint8Array(cells);
+    for (let i = 0; i < cells; i++) perm[i] = i;
+    for (let i = cells - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const t = perm[i];
+      perm[i] = perm[j];
+      perm[j] = t;
+    }
+    return { cells, perm };
+  });
+
+  function vnoise(x, y, oct) {
+    const { cells, perm } = oct;
+    const xi = Math.floor(x);
+    const yi = Math.floor(y);
+    const xf = x - xi;
+    const yf = y - yi;
+    const sx = xf * xf * (3 - 2 * xf);
+    const sy = yf * yf * (3 - 2 * yf);
+    const wrap = (v) => ((v % cells) + cells) % cells;
+    const lat = (ix, iy) => perm[(wrap(ix) + perm[wrap(iy)]) % cells] / (cells - 1);
+    const a = lat(xi, yi);
+    const b = lat(xi + 1, yi);
+    const c = lat(xi, yi + 1);
+    const d = lat(xi + 1, yi + 1);
+    return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+  }
+
+  // 高度场（fbm 叠加）
+  const height = new Float32Array(size * size);
+  for (let py = 0; py < size; py++) {
+    for (let px = 0; px < size; px++) {
+      let h = 0;
+      let amp = 1;
+      let norm = 0;
+      for (const oct of octaves) {
+        h += vnoise((px / size) * oct.cells, (py / size) * oct.cells, oct) * amp;
+        norm += amp;
+        amp *= 0.5;
+      }
+      height[py * size + px] = h / norm;
+    }
+  }
+
+  // 中心差分 → 法线（边缘环绕取样）
+  const STRENGTH = 2.4;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const at = (x, y) => height[((y + size) % size) * size + ((x + size) % size)];
+  for (let py = 0; py < size; py++) {
+    for (let px = 0; px < size; px++) {
+      const dx = (at(px + 1, py) - at(px - 1, py)) * STRENGTH;
+      const dy = (at(px, py + 1) - at(px, py - 1)) * STRENGTH;
+      const inv = 1 / Math.sqrt(dx * dx + dy * dy + 1);
+      const i = (py * size + px) * 4;
+      img.data[i] = (-dx * inv * 0.5 + 0.5) * 255;
+      img.data[i + 1] = (-dy * inv * 0.5 + 0.5) * 255;
+      img.data[i + 2] = (inv * 0.5 + 0.5) * 255;
+      img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.NoColorSpace; // 法线数据，不做 sRGB 转换
+  return tex;
+}
 
 // 预处理：归一化方向，预计算波数 k 与角频率 omega（深水色散关系 ω=√(g·k)）
 const WAVES = RAW_WAVES.map((w) => {
@@ -121,6 +199,7 @@ const fragmentShader = /* glsl */ `
   uniform float uDetailWaves;  // 细节小波数量上限（画质档位）
   uniform float uDaylight;     // 昼夜因子（0 夜 ~ 1 昼，daytime.js 写入）
   uniform float uLightElev;    // 主导光源仰角（daytime.js 写入，驱动光路形态）
+  uniform sampler2D uNormalMap; // 程序化水面法线贴图（细节法线 + 泡沫打散）
 
   ${SKY_GLSL}
 
@@ -151,24 +230,18 @@ const fragmentShader = /* glsl */ `
     float camDist = length(toCam);
     vec3 v = toCam / camDist;
 
-    // ---- 细节法线：10 个高频小波（只扰动法线不做位移，随距离衰减防远处闪烁） ----
+    // ---- 细节法线：程序化法线贴图三层滚动采样（随距离衰减防摩尔纹；层数=画质档） ----
     vec3 n = normalize(vNormal);
     float detailFade = 1.0 - smoothstep(40.0, 170.0, camDist);
     if (detailFade > 0.001 && uDetailWaves > 0.5) {
-      vec2 dn = vec2(0.0);
-      for (int i = 0; i < 10; i++) {
-        if (float(i) >= uDetailWaves) break; // 画质档位控制
-        float fi = float(i);
-        float ang = fi * 2.39996 + 0.7;        // 黄金角让方向均匀分散
-        vec2 d = vec2(cos(ang), sin(ang));
-        float len = 0.5 + fi * 0.6;            // 波长 0.5 ~ 5.9 m
-        float k = 6.28318 / len;
-        float amp = 0.010 + fi * 0.004;
-        float omega = sqrt(9.8 * k) * 1.4;     // 涟漪跑得比深水色散快一点，更活泼
-        float f = k * dot(d, vWorldPos.xz) - omega * uTime;
-        dn -= d * (k * amp * cos(f));
+      vec3 nm = texture2D(uNormalMap, (vWorldPos.xz + vec2(uTime * 0.55, uTime * 0.22)) / 4.0).rgb * 2.0 - 1.0;
+      if (uDetailWaves > 1.5) {
+        nm += texture2D(uNormalMap, (vWorldPos.xz * vec2(1.0, 0.92) + vec2(-uTime * 0.30, uTime * 0.26)) / 13.0).rgb * 2.0 - 1.0;
       }
-      n = normalize(n + vec3(dn.x, 0.0, dn.y) * detailFade);
+      if (uDetailWaves > 2.5) {
+        nm += texture2D(uNormalMap, (vWorldPos.xz + vec2(uTime * 0.16, -uTime * 0.12)) / 47.0).rgb * 2.0 - 1.0;
+      }
+      n = normalize(n + vec3(nm.x, 0.0, nm.y) * 0.22 * detailFade);
     }
 
     // ---- 基础色：深蓝 -> 青绿随波高渐变（夜晚随 uDaylight 压暗） ----
@@ -178,6 +251,9 @@ const fragmentShader = /* glsl */ `
     vec3 r = reflect(-v, n);
     r.y = abs(r.y);                            // 不允许反射到海平面以下
     vec3 refl = skyColor(r);
+    // 向阳侧混入地平线暖色：黄昏时"金色海面"更明显
+    float sunSide = pow(max(dot(normalize(r.xz + vec2(1e-4, 0.0)), normalize(uSunDir.xz + vec2(1e-4, 0.0))), 0.0), 3.0);
+    refl = mix(refl, uHorizon * 1.1, sunSide * 0.25);
     float fres = 0.04 + 0.96 * pow(1.0 - max(dot(n, v), 0.0), 5.0); // Schlick
     col = mix(col, refl, clamp(fres * 1.1, 0.0, 1.0));
 
@@ -208,10 +284,10 @@ const fragmentShader = /* glsl */ `
     float glitter = pow(ndh, 520.0) * smoothstep(0.55, 0.95, g) * (1.0 + 0.5 * lowElev);
     col += specCol * min(glitter * 3.0, 2.0) * (0.3 + 0.7 * detailFade) * (0.15 + 0.85 * uDaylight);
 
-    // ---- 破浪白沫：雅可比 + 波高阈值，噪声打散边缘，波谷渐隐 ----
-    float foamN = vnoise(vWorldPos.xz * 2.3 + vec2(uTime * 0.12, -uTime * 0.09));
-    float foamBase = clamp(vFoam * 1.1 + smoothstep(0.6, 0.92, vHeight) * 0.55 + uFoamBoost, 0.0, 1.0);
-    float foam = smoothstep(0.42, 0.72, foamBase + (foamN - 0.5) * 0.45);
+    // ---- 破浪白沫：雅可比 + 波高阈值，法线贴图绿通道纹理化打散，波谷渐隐 ----
+    float foamN = texture2D(uNormalMap, vWorldPos.xz * 0.09 + vec2(uTime * 0.02, -uTime * 0.014)).g;
+    float foamBase = clamp(vFoam * 0.9 + smoothstep(0.62, 0.95, vHeight) * 0.5 + uFoamBoost, 0.0, 1.0);
+    float foam = smoothstep(0.48, 0.78, foamBase + (foamN - 0.5) * 0.45);
     foam *= smoothstep(0.28, 0.5, vHeight);            // 波谷处泡沫渐隐
 
     // ---- 岛屿浅水碎浪带：碰撞半径附近一圈泡沫，噪声打散 + 随时间呼吸 ----
@@ -223,7 +299,7 @@ const fragmentShader = /* glsl */ `
       float d = distance(vWorldPos.xz, uIslands[i].xy);
       surf = max(surf, 1.0 - smoothstep(0.0, 7.0, abs(d - rr)));
     }
-    float surfN = vnoise(vWorldPos.xz * 1.6 + vec2(uTime * 0.25, -uTime * 0.18));
+    float surfN = texture2D(uNormalMap, vWorldPos.xz * 0.05 + vec2(uTime * 0.012, -uTime * 0.008)).g;
     surf *= 0.55 + 0.45 * surfN;
     foam = max(foam, surf);
 
@@ -265,6 +341,8 @@ export function createWater(sunDir, islands = []) {
   // merge 之后再把波形数组填进去（数组不便走 merge）
   uniforms.uWaves = { value: WAVES.map((w) => new THREE.Vector4(w.dx, w.dz, w.amp, w.k)) };
   uniforms.uWave2 = { value: WAVES.map((w) => new THREE.Vector4(w.omega, w.q, 0, 0)) };
+  // 程序化法线贴图（一次性 CPU 生成，RepeatWrapping 平铺）
+  uniforms.uNormalMap = { value: generateWaterNormalMap(512) };
   // 岛屿碎浪带：x, z, 半径, 呼吸相位；空槽位半径为 0
   uniforms.uIslands = {
     value: Array.from({ length: 10 }, (_, i) => islands[i]
