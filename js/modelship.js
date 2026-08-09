@@ -45,6 +45,25 @@ export const SHIP_MODELS = {
     stats: { hp: 70, maxSpeed: 19.5, turnRate: 1.3, cannons: 2 },
     bars: { hp: 0.35, speed: 1.0, cannons: 0.35 },
   },
+  // Quaternius Pirate Kit（CC0，自嵌入无外部依赖）；stats 仅作回退，实际数值来自 ships.json
+  quaternius_ship_large: {
+    name: '大型海盗船',
+    desc: 'Quaternius Pirate Kit 精致模型',
+    path: 'models/quaternius_pirate/Ship_Large.gltf',
+    thumb: null, // 无预制缩略图，加载后离屏实拍
+    targetLength: 11,
+    stats: { hp: 144, maxSpeed: 17, turnRate: 0.86, cannons: 5 },
+    bars: { hp: 0.85, speed: 0.8, cannons: 0.8 },
+  },
+  quaternius_ship_small: {
+    name: '小型海盗船',
+    desc: 'Quaternius Pirate Kit 精致模型',
+    path: 'models/quaternius_pirate/Ship_Small.gltf',
+    thumb: null,
+    targetLength: 6.5,
+    stats: { hp: 90, maxSpeed: 17, turnRate: 1.36, cannons: 3 },
+    bars: { hp: 0.5, speed: 0.8, cannons: 0.5 },
+  },
 };
 
 export const DEFAULT_SHIP_ID = 'dutch_ship_medium';
@@ -137,6 +156,7 @@ function normalizeModel(gltfScene, targetLength, flip = null) {
 
   container.userData.rawLength = len;
   container.userData.scale = s;
+  container.userData.flipped = needFlip;
   return container;
 }
 
@@ -154,7 +174,9 @@ export function loadShipModel(id) {
         (gltf) => {
           const template = normalizeModel(gltf.scene, def.targetLength, def.flip ?? null);
           console.info(
-            `[ship-model] ${id} 原始船长 ${template.userData.rawLength.toFixed(2)}，缩放系数 ${template.userData.scale.toFixed(4)}`
+            `[ship-model] ${id} 原始船长 ${template.userData.rawLength.toFixed(2)}，` +
+            `缩放系数 ${template.userData.scale.toFixed(4)}，` +
+            `船头判定 ${template.userData.flipped ? '-Z（已翻转 180°）' : '+Z（未翻转）'}`
           );
           resolve(template);
         },

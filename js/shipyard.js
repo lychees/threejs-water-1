@@ -195,8 +195,10 @@ export function buildShip(spec) {
 }
 
 // ================= 缩略图：共享离屏 renderer，渲染一帧转 dataURL =================
+// dispose=true 用于程序化船副本（渲染完释放几何体）；
+// dispose=false 用于真实模型模板（几何体与游戏内克隆共享，绝不能销毁）
 let thumbRenderer = null;
-export function renderShipThumbnail(group) {
+export function renderShipThumbnail(group, { dispose = true } = {}) {
   try {
     if (!thumbRenderer) {
       thumbRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
@@ -224,9 +226,11 @@ export function renderShipThumbnail(group) {
     thumbRenderer.render(scene, cam);
     const url = thumbRenderer.domElement.toDataURL('image/png');
 
-    // 缩略图副本用完即弃：只释放几何体（材质是共享缓存的）
     scene.remove(group);
-    group.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
+    if (dispose) {
+      // 缩略图副本用完即弃：只释放几何体（材质是共享缓存的）
+      group.traverse((o) => { if (o.isMesh) o.geometry.dispose(); });
+    }
     return url;
   } catch (e) {
     console.warn('[shipyard] 缩略图渲染失败：', e);
@@ -266,8 +270,8 @@ export const SHIP_DEFS = [
   { id: 11, en: 'Galleon', cn: '盖伦帆船', model: 'dutch_ship_large_01' },
   { id: 12, en: 'Xebec', cn: '谢贝克船', spec: { length: 11, beam: 2.0, depth: 1.1, hull: 0x8a5f36, bowUp: 0.3, masts: [{ z: 0.28, h: 7.5, sail: LAT(3.2, 4.6) }, { z: 0, h: 8, sail: LAT(3.6, 5.2) }, { z: -0.28, h: 6.5, sail: LAT(2.8, 4.0) }] } },
   { id: 13, en: 'Pinnace', cn: '纵帆快船', model: 'ship_pinnace' },
-  { id: 14, en: 'Sloop', cn: '单桅帆船', spec: { length: 7, beam: 2.0, depth: 1.0, hull: 0x845632, masts: [{ z: 0.1, h: 7, sail: GAF(3.6, 4.4) }] } },
-  { id: 15, en: 'Frigate', cn: '巡航护卫舰', spec: { length: 12, beam: 2.4, depth: 1.3, hull: 0x5a4632, stripe: 0x22201e, masts: [{ z: 0.3, h: 8, sail: SQ(4.6, 4.6) }, { z: 0.02, h: 9, sail: SQ(5.0, 5.2) }, { z: -0.28, h: 7, sail: SQ(3.6, 3.6) }] } },
+  { id: 14, en: 'Sloop', cn: '单桅帆船', model: 'quaternius_ship_small' },
+  { id: 15, en: 'Frigate', cn: '巡航护卫舰', model: 'quaternius_ship_large' },
   { id: 16, en: 'Barge', cn: '大型驳船', spec: { length: 12, beam: 4.2, depth: 1.1, hull: 0x6a5136, boxy: true, masts: [{ z: 0.28, h: 7, sail: SQ(5.0, 4.0) }, { z: 0, h: 7.5, sail: SQ(5.2, 4.2) }, { z: -0.28, h: 6.5, sail: SQ(4.4, 3.6) }] } },
   { id: 17, en: 'Full-rigged Ship', cn: '全帆装船', spec: { length: 14, beam: 3.0, depth: 1.5, hull: 0x5f4028, sternCastle: 0.8, stripe: 0x2b2b2b, masts: [{ z: 0.36, h: 8, sail: SQ(4.6, 4.4) }, { z: 0.12, h: 9.5, sail: SQ(5.2, 5.4) }, { z: -0.12, h: 9, sail: SQ(4.8, 5.0) }, { z: -0.36, h: 7, sail: SQ(3.6, 3.4) }] } },
   { id: 18, en: 'Junk', cn: '中式戎克船', spec: { length: 10, beam: 3.2, depth: 1.4, hull: 0x7a3f28, sternCastle: 1.0, masts: [{ z: 0.16, h: 8, sail: LUG(4.6, 5.2) }, { z: -0.22, h: 7, sail: LUG(3.8, 4.2) }] } },

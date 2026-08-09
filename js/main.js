@@ -150,6 +150,22 @@ function buildShipCards() {
       applyShipChoice(def.id);
     });
     wrap.appendChild(card);
+
+    // 无预制缩略图的真实模型：按需加载完成后用同一离屏管线实拍一张补上
+    if (def.model && !thumb) {
+      loadShipModel(def.model).then((template) => {
+        if (!template) return;
+        const url = renderShipThumbnail(template, { dispose: false }); // 模板几何体共享，不可销毁
+        if (!url) return;
+        const ph = card.querySelector('.thumb-fallback');
+        if (ph) {
+          const img = document.createElement('img');
+          img.src = url;
+          img.alt = def.cn;
+          ph.replaceWith(img);
+        }
+      });
+    }
   }
 }
 
