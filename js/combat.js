@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 
 const BALL_GRAVITY = 18;   // 炮弹重力（比真实大，手感更 arcade）
+export { BALL_GRAVITY };   // 弹道预览与命中判定共用
 const HIT_RADIUS = 3.4;    // 基准船体命中半径（船长 9m 基准，大船按 lengthScale 放大）
 
 // ---- 一次性粒子簇 ----

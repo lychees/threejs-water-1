@@ -165,9 +165,11 @@ export class Ship {
   }
 
   // 命中后按概率独立判定 debuff，返回本次触发的 key 列表
-  rollDebuffs() {
+  // skipFire：下雨天（风暴中）不附加着火
+  rollDebuffs(skipFire = false) {
     const applied = [];
     for (const [key, def] of Object.entries(DEBUFF_DEFS)) {
+      if (key === 'fire' && skipFire) continue;
       if (Math.random() < def.chance) {
         this.debuff[key] = def.duration; // 重复触发刷新时间
         applied.push(key);

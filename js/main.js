@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { createWater, getWaveHeight } from './water.js';
 import { createSky, SUN_DIR } from './sky.js';
 import { Ship, DEBUFF_DEFS } from './ship.js';
-import { Combat } from './combat.js';
+import { Combat, BALL_GRAVITY } from './combat.js';
 import { EnemyFleet } from './enemy.js';
 import { loadShipModel, instantiateShip, SHIP_MODELS, BASE_LENGTH } from './modelship.js';
 import { SHIP_DEFS, buildShip, buildFigurehead, computeStats, FALLBACK_STATS, renderShipThumbnail, DEFAULT_SHIP_DEF_ID } from './shipyard.js';
@@ -305,15 +305,9 @@ let gameOverT = 0;
 const $ = (id) => document.getElementById(id);
 const hud = $('hud');
 
-// 装填条：蓄力中显示蓄力进度（金色高亮），否则显示装填进度
-function setReloadBar(el, cooldown, charge, cooldownMax) {
-  if (charge !== null) {
-    el.classList.add('charging');
-    el.style.width = `${Math.min(1, charge / CHARGE_TIME) * 100}%`;
-  } else {
-    el.classList.remove('charging');
-    el.style.width = `${(1 - cooldown / cooldownMax) * 100}%`;
-  }
+// 装填条只表示冷却进度（蓄力进度由画面里的弹道预览线表达）
+function setReloadBar(el, cooldown, cooldownMax) {
+  el.style.width = `${(1 - cooldown / cooldownMax) * 100}%`;
 }
 
 function updateHUD() {
@@ -325,9 +319,9 @@ function updateHUD() {
   $('sail-state').textContent = sailAmount < 0
     ? `帆位：倒车 ${Math.round(-sailAmount * 100)}%（W 复位）`
     : `帆位：${Math.round(sailAmount * 100)}%（按住 W/S 调整）`;
-  setReloadBar($('reload-l'), cooldownL, chargeL, RELOAD_TIME);
-  setReloadBar($('reload-r'), cooldownR, chargeR, RELOAD_TIME);
-  setReloadBar($('reload-b'), cooldownBow, chargeBow, BOW_RELOAD);
+  setReloadBar($('reload-l'), cooldownL, RELOAD_TIME);
+  setReloadBar($('reload-r'), cooldownR, RELOAD_TIME);
+  setReloadBar($('reload-b'), cooldownBow, BOW_RELOAD);
   // 玩家 debuff 图标（带剩余秒数）
   $('debuff-fire').textContent = player.debuff.fire > 0 ? `🔥 ${Math.ceil(player.debuff.fire)}s` : '';
   $('debuff-leak').textContent = player.debuff.leak > 0 ? `💧 ${Math.ceil(player.debuff.leak)}s` : '';
@@ -643,6 +637,88 @@ function fireBow(power) {
   cooldownBow = BOW_RELOAD;
 }
 
+// ===== 蓄力弹道预览：按当前蓄力比例实时模拟抛物线（舷炮取中间那门） =====
+const TRAJ_POINTS = 30; // 弹道采样段数
+const TRAJ_DT = 0.08;   // 采样步长（秒）
+
+function makeTrajViz() {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((TRAJ_POINTS + 2) * 3), 3));
+  const line = new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffd76e, transparent: true, opacity: 0.9 }));
+  line.frustumCulled = false;
+  line.visible = false;
+  scene.add(line);
+  // 落水点圆圈标记
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(0.5, 0.72, 20),
+    new THREE.MeshBasicMaterial({ color: 0xffd76e, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false })
+  );
+  ring.rotation.x = -Math.PI / 2;
+  ring.visible = false;
+  scene.add(ring);
+  return { line, ring };
+}
+const trajL = makeTrajViz();
+const trajR = makeTrajViz();
+const trajBow = makeTrajViz();
+
+// side: -1 左舷 / +1 右舷 / 0 艏炮；charge 为 null 时隐藏
+function updateTrajViz(viz, charge, side, time) {
+  if (charge === null) {
+    viz.line.visible = false;
+    viz.ring.visible = false;
+    return;
+  }
+  const p = Math.min(1, charge / CHARGE_TIME);
+  const ls = player.lengthScale || 1;
+  const start = player.position.clone();
+  let dir;
+  let vy;
+  let baseSpeed;
+  if (side === 0) {
+    dir = player.forward;
+    start.addScaledVector(dir, 4.2 * ls);
+    start.y += 1.4;
+    vy = 2.5;
+    baseSpeed = BOW_SPEED;
+  } else {
+    dir = new THREE.Vector3(side * Math.cos(player.heading), 0, -side * Math.sin(player.heading));
+    start.addScaledVector(dir, 1.5);
+    start.y += 1.3;
+    vy = 5.5; // 舷炮上抛量的中值
+    baseSpeed = 30;
+  }
+  const vel = dir.multiplyScalar(baseSpeed * (0.6 + 0.9 * p));
+  vel.y = vy;
+
+  // 逐步积分，落水即截断
+  const pos = start.clone();
+  const attr = viz.line.geometry.attributes.position;
+  let count = 0;
+  for (let i = 0; i <= TRAJ_POINTS; i++) {
+    attr.setXYZ(count, pos.x, pos.y, pos.z);
+    count++;
+    vel.y -= BALL_GRAVITY * TRAJ_DT;
+    pos.addScaledVector(vel, TRAJ_DT);
+    const waveY = getWaveHeight(pos.x, pos.z, time);
+    if (pos.y <= waveY) {
+      attr.setXYZ(count, pos.x, waveY, pos.z);
+      count++;
+      break;
+    }
+  }
+  attr.needsUpdate = true;
+  viz.line.geometry.setDrawRange(0, count);
+  viz.line.visible = true;
+  // 落水点标记（轻微脉动）
+  const ex = attr.getX(count - 1);
+  const ey = attr.getY(count - 1);
+  const ez = attr.getZ(count - 1);
+  viz.ring.position.set(ex, ey + 0.1, ez);
+  viz.ring.scale.setScalar(1 + Math.sin(time * 6) * 0.15);
+  viz.ring.visible = true;
+}
+
 // ===== 开始 / 结束 / 重开 =====
 function begin() {
   $('start-overlay').classList.add('hidden');
@@ -682,7 +758,8 @@ function onHit(ball, target) {
   audio.hit();
   const sunk = target.ship.takeDamage(dmg);
   if (!sunk) {
-    for (const key of target.ship.rollDebuffs()) {
+    // 雨天（风暴中）不附加着火
+    for (const key of target.ship.rollDebuffs(weather.strength > 0.5)) {
       // 敌船中 debuff：头上飘字；玩家中 debuff：HUD 图标表达（updateHUD）
       if (!target.isPlayer) floatTextAt(`敌船${DEBUFF_DEFS[key].label}！`, target.ship.position);
     }
@@ -838,6 +915,85 @@ function updateUnderwater(dt, time) {
   // TODO(音频): 此处可用 underT 驱动环境音低通滤波实现闷化（已通过 setEnvironment 接入）
 }
 
+// ===== 船只碰撞（椭圆碰撞体 + 撞击伤害） =====
+const COLLISION_MIN_SPEED = 3;    // 相对速度低于此值不计伤害
+const COLLISION_DAMAGE_MUL = 4;   // 伤害 = (相对速度 - 阈值) × 系数
+const COLLISION_COOLDOWN = 1.0;   // 同一对船的伤害结算冷却
+const COLLISION_GRIDS = 12;       // 粗筛距离（大于此直接跳过）
+const collisionCooldowns = new Map(); // "cidA:cidB" -> 上次结算时间
+let shipCidCounter = 0;
+
+function resolveShipCollisions() {
+  const ships = [player, ...fleet.enemies].filter((s) => !s.sinking && !s.dead);
+  for (let i = 0; i < ships.length; i++) {
+    for (let j = i + 1; j < ships.length; j++) {
+      const a = ships[i];
+      const b = ships[j];
+      let dx = b.position.x - a.position.x;
+      let dz = b.position.z - a.position.z;
+      let dist = Math.hypot(dx, dz);
+      if (dist > COLLISION_GRIDS) continue; // 粗筛
+
+      // 椭圆有效半径：沿连线方向取极径（长半轴≈船长×0.9/2，短半轴≈船宽/2，均由 lengthScale 派生）
+      const effR = (s) => {
+        const la = 4.0 * (s.lengthScale || 1);
+        const lb = 1.35 * (s.lengthScale || 1);
+        const fx = Math.sin(s.heading);
+        const fz = Math.cos(s.heading);
+        const cosT = dist > 0.001 ? (dx * fx + dz * fz) / dist : 1;
+        const sinT = Math.sqrt(Math.max(0, 1 - cosT * cosT));
+        return (la * lb) / Math.sqrt(lb * lb * cosT * cosT + la * la * sinT * sinT);
+      };
+      const pen = effR(a) + effR(b) - dist;
+      if (pen <= 0) continue;
+
+      if (dist < 0.001) { dx = 1; dz = 0; dist = 1; } // 完全重叠的退化情况
+      const nx = dx / dist;
+      const nz = dz / dist;
+
+      // 撞击前的相对速度（用于伤害结算）
+      const vax = Math.sin(a.heading) * a.speed;
+      const vaz = Math.cos(a.heading) * a.speed;
+      const vbx = Math.sin(b.heading) * b.speed;
+      const vbz = Math.cos(b.heading) * b.speed;
+      const relSpeed = Math.hypot(vbx - vax, vbz - vaz);
+
+      // 位置分离（各推一半）
+      a.position.x -= (nx * pen) / 2;
+      a.position.z -= (nz * pen) / 2;
+      b.position.x += (nx * pen) / 2;
+      b.position.z += (nz * pen) / 2;
+
+      // 消掉沿法向的速度分量，切向保留（船速只能沿船头方向，等效按比例衰减）
+      for (const s of [a, b]) {
+        const fDotN = Math.sin(s.heading) * nx + Math.cos(s.heading) * nz;
+        s.speed *= Math.max(0.2, 1 - fDotN * fDotN);
+      }
+
+      // 撞击伤害（同对 1s 冷却）
+      if (relSpeed > COLLISION_MIN_SPEED) {
+        a._cid ??= ++shipCidCounter;
+        b._cid ??= ++shipCidCounter;
+        const key = a._cid < b._cid ? `${a._cid}:${b._cid}` : `${b._cid}:${a._cid}`;
+        if (time - (collisionCooldowns.get(key) ?? -9) > COLLISION_COOLDOWN) {
+          collisionCooldowns.set(key, time);
+          const dmg = (relSpeed - COLLISION_MIN_SPEED) * COLLISION_DAMAGE_MUL;
+          const mid = new THREE.Vector3(
+            (a.position.x + b.position.x) / 2,
+            a.position.y + 1,
+            (a.position.z + b.position.z) / 2
+          );
+          combat.explosion(mid); // 木屑+硝烟
+          audio.hit();
+          const sunkA = a.takeDamage(dmg);
+          const sunkB = b.takeDamage(dmg);
+          if ((sunkA && a === player) || (sunkB && b === player)) gameOver();
+        }
+      }
+    }
+  }
+}
+
 // ===== 主循环 =====
 const clock = new THREE.Clock();
 let time = 0;
@@ -863,7 +1019,7 @@ renderer.setAnimationLoop(() => {
       asternHoldT = 0;
     }
 
-    const weatherSpeedMul = 1 - weather.strength * 0.1;
+    const weatherSpeedMul = 1 - weather.strength * 0.25; // 雨天全船减速（玩家）
     const targetSpeed = sailAmount * player.maxSpeed * weatherSpeedMul * player.speedMul;
     player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
     let turn = 0;
@@ -882,6 +1038,9 @@ renderer.setAnimationLoop(() => {
   if (chargeL !== null) chargeL += dt;
   if (chargeR !== null) chargeR += dt;
   if (chargeBow !== null) chargeBow += dt;
+  updateTrajViz(trajL, chargeL, -1, time);
+  updateTrajViz(trajR, chargeR, 1, time);
+  updateTrajViz(trajBow, chargeBow, 0, time);
 
   // 冷却
   cooldownL = Math.max(0, cooldownL - dt);
@@ -890,8 +1049,20 @@ renderer.setAnimationLoop(() => {
 
   // 实体更新
   player.update(dt, time, getWaveHeight);
+  fleet.weatherStrength = weather.strength; // 雨天全船减速（敌船）
   fleet.update(dt, time, player, getWaveHeight, fleetHooks);
   wakes.update(dt, time, [player, ...fleet.enemies]);
+  resolveShipCollisions();
+
+  // 大雨灭火：风暴中所有船的着火立即清除
+  if (weather.strength > 0.5) {
+    for (const s of [player, ...fleet.enemies]) {
+      if (s.debuff.fire > 0) {
+        s.debuff.fire = 0;
+        if (s === player) floatText('大雨浇灭了火焰');
+      }
+    }
+  }
 
   // 世界：岛屿碰撞 + 浮标/补给动画与拾取
   if (world) {
