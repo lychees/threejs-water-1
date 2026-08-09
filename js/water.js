@@ -1,5 +1,6 @@
-// 水面：Gerstner 波叠加（GPU 顶点位移 + CPU 同参数高度采样）
+// 水面：Gerstner 大波位移 + 细节法线 + 次表面散射 + Jacobian 白沫 + 天空反射
 import * as THREE from 'three';
+import { SKY_GLSL, SKY_COLORS } from './sky.js';
 
 // 波形参数表：CPU（浮力）与 GPU（顶点着色器）共用同一份，保证一致
 // dir 会自动归一化；amp 振幅；len 波长；q 波峰尖锐度(0~1)
@@ -42,6 +43,7 @@ const vertexShader = /* glsl */ `
   varying vec3 vWorldPos;
   varying vec3 vNormal;
   varying float vHeight;               // 归一化波高 0~1
+  varying float vFoam;                 // 由雅可比行列式推得的破浪强度
 
   #include <fog_pars_vertex>
 
@@ -50,6 +52,10 @@ const vertexShader = /* glsl */ `
     vec3 disp = vec3(0.0);
     vec3 n = vec3(0.0, 1.0, 0.0);
     float ampSum = 0.0;
+    // 水平位移梯度（雅可比矩阵元），用于检测波峰卷破
+    float dxx = 0.0;
+    float dzz = 0.0;
+    float dxz = 0.0;
 
     for (int i = 0; i < ${WAVE_COUNT}; i++) {
       vec2 d = uWaves[i].xy;
@@ -70,11 +76,21 @@ const vertexShader = /* glsl */ `
       n.x -= d.x * k * amp * c;
       n.z -= d.y * k * amp * c;
       ampSum += amp;
+
+      // 水平位移对静止坐标的偏导
+      float qs = q * amp * k * s;
+      dxx -= d.x * d.x * qs;
+      dzz -= d.y * d.y * qs;
+      dxz -= d.x * d.y * qs;
     }
 
     vec3 p = position + disp;
     vHeight = disp.y / ampSum * 0.5 + 0.5;
     vNormal = normalize(n);
+
+    // 雅可比行列式：J 越小说明水面折叠越厉害（波峰卷破），波幅温和故放大系数
+    float J = (1.0 + dxx) * (1.0 + dzz) - dxz * dxz;
+    vFoam = clamp((1.0 - J) * 5.0, 0.0, 1.0);
 
     vec4 wp = modelMatrix * vec4(p, 1.0);
     vWorldPos = wp.xyz;
@@ -85,37 +101,90 @@ const vertexShader = /* glsl */ `
 `;
 
 const fragmentShader = /* glsl */ `
+  uniform float uTime;
   uniform vec3 uDeepColor;
   uniform vec3 uShallowColor;
-  uniform vec3 uSkyColor;
-  uniform vec3 uSunDir;
-  uniform vec3 uSunColor;
+  uniform vec3 uSSSColor;
+  uniform vec3 uFoamColor;
+
+  ${SKY_GLSL}
 
   varying vec3 vWorldPos;
   varying vec3 vNormal;
   varying float vHeight;
+  varying float vFoam;
 
   #include <fog_pars_fragment>
 
-  void main() {
-    vec3 n = normalize(vNormal);
-    vec3 v = normalize(cameraPosition - vWorldPos);
+  // 廉价二维值噪声（泡沫打散、太阳闪点）
+  float hash21(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+  }
+  float vnoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
 
-    // 深蓝 -> 青绿：随波高渐变
+  void main() {
+    vec3 toCam = cameraPosition - vWorldPos;
+    float camDist = length(toCam);
+    vec3 v = toCam / camDist;
+
+    // ---- 细节法线：10 个高频小波（只扰动法线不做位移，随距离衰减防远处闪烁） ----
+    vec3 n = normalize(vNormal);
+    float detailFade = 1.0 - smoothstep(40.0, 170.0, camDist);
+    if (detailFade > 0.001) {
+      vec2 dn = vec2(0.0);
+      for (int i = 0; i < 10; i++) {
+        float fi = float(i);
+        float ang = fi * 2.39996 + 0.7;        // 黄金角让方向均匀分散
+        vec2 d = vec2(cos(ang), sin(ang));
+        float len = 0.5 + fi * 0.6;            // 波长 0.5 ~ 5.9 m
+        float k = 6.28318 / len;
+        float amp = 0.010 + fi * 0.004;
+        float omega = sqrt(9.8 * k) * 1.4;     // 涟漪跑得比深水色散快一点，更活泼
+        float f = k * dot(d, vWorldPos.xz) - omega * uTime;
+        dn -= d * (k * amp * cos(f));
+      }
+      n = normalize(n + vec3(dn.x, 0.0, dn.y) * detailFade);
+    }
+
+    // ---- 基础色：深蓝 -> 青绿随波高渐变 ----
     vec3 col = mix(uDeepColor, uShallowColor, vHeight);
 
-    // 菲涅尔：掠射角反射天空色
-    float fres = pow(1.0 - max(dot(n, v), 0.0), 3.0);
-    col = mix(col, uSkyColor, fres * 0.65);
+    // ---- 天空反射：反射向量查与天空穹顶同一个 skyColor()，水天无缝 ----
+    vec3 r = reflect(-v, n);
+    r.y = abs(r.y);                            // 不允许反射到海平面以下
+    vec3 refl = skyColor(r);
+    float fres = 0.04 + 0.96 * pow(1.0 - max(dot(n, v), 0.0), 5.0); // Schlick
+    col = mix(col, refl, clamp(fres * 1.1, 0.0, 1.0));
 
-    // 太阳高光（Blinn-Phong 镜面）
+    // ---- 次表面散射：视线朝向太阳时，浪峰透出青绿辉光 ----
+    float crest = smoothstep(0.45, 0.95, vHeight);
+    float sss = pow(max(dot(v, uSunDir), 0.0), 3.0) * crest;
+    col += uSSSColor * sss * 0.55;
+
+    // ---- 太阳高光：宽高光 + 噪声调制的窄闪点（glitter） ----
     vec3 h = normalize(uSunDir + v);
-    float spec = pow(max(dot(n, h), 0.0), 240.0);
-    col += uSunColor * spec * 1.6;
+    float ndh = max(dot(n, h), 0.0);
+    col += uSunColor * pow(ndh, 260.0) * 1.2;
+    float g = vnoise(vWorldPos.xz * 22.0 + vec2(uTime * 1.8, -uTime * 1.3));
+    float glitter = pow(ndh, 520.0) * smoothstep(0.55, 0.95, g);
+    col += uSunColor * glitter * 3.0 * (0.3 + 0.7 * detailFade);
 
-    // 波峰白沫：波高高且法线倾斜处起沫
-    float foam = smoothstep(0.72, 0.95, vHeight + (1.0 - n.y) * 0.35);
-    col = mix(col, vec3(0.93, 0.97, 0.98), foam * 0.85);
+    // ---- 破浪白沫：雅可比 + 波高阈值，噪声打散边缘，波谷渐隐 ----
+    float foamN = vnoise(vWorldPos.xz * 2.3 + vec2(uTime * 0.12, -uTime * 0.09));
+    float foamBase = clamp(vFoam * 1.1 + smoothstep(0.6, 0.92, vHeight) * 0.55, 0.0, 1.0);
+    float foam = smoothstep(0.42, 0.72, foamBase + (foamN - 0.5) * 0.45);
+    foam *= smoothstep(0.28, 0.5, vHeight);            // 波谷处泡沫渐隐
+    foam *= 1.0 - smoothstep(150.0, 320.0, camDist);   // 远处淡出防摩尔纹
+    col = mix(col, uFoamColor, foam * 0.9);
 
     gl_FragColor = vec4(col, 1.0);
     #include <tonemapping_fragment>
@@ -134,9 +203,13 @@ export function createWater(sunDir) {
       uTime: { value: 0 },
       uDeepColor: { value: new THREE.Color(0x0b3b5e) },
       uShallowColor: { value: new THREE.Color(0x1e9e9a) },
-      uSkyColor: { value: new THREE.Color(0x7fc4e8) },
+      uSSSColor: { value: new THREE.Color(0x35d0b0) },
+      uFoamColor: { value: new THREE.Color(0xf2fbfc) },
+      // 与天空穹顶共用同一组参数（SKY_GLSL 里声明的 uniform）
+      uZenith: { value: SKY_COLORS.zenith.clone() },
+      uHorizon: { value: SKY_COLORS.horizon.clone() },
       uSunDir: { value: sunDir.clone() },
-      uSunColor: { value: new THREE.Color(0xffe6b0) },
+      uSunColor: { value: SKY_COLORS.sun.clone() },
     },
   ]);
   // merge 之后再把波形数组填进去（数组不便走 merge）
