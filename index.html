@@ -35,6 +35,19 @@
   .overlay button { margin-top: 26px; font-size: 20px; padding: 12px 46px; border: none; border-radius: 30px; cursor: pointer; background: #e8a33d; color: #3a2405; font-weight: bold; letter-spacing: 4px; }
   .overlay button:hover { background: #f5bc63; }
   .hidden { display: none !important; }
+
+  /* ===== 选船卡片 ===== */
+  #ship-select { display: flex; gap: 14px; margin-top: 24px; }
+  .ship-card { width: 168px; background: rgba(0, 20, 35, .55); border: 2px solid rgba(255,255,255,.2); border-radius: 12px; padding: 10px; cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s; }
+  .ship-card:hover { transform: translateY(-3px); border-color: rgba(232,163,61,.6); }
+  .ship-card.selected { border-color: #e8a33d; box-shadow: 0 0 14px rgba(232,163,61,.45); }
+  .ship-card img { width: 100%; border-radius: 8px; display: block; background: rgba(255,255,255,.06); }
+  .ship-card h3 { margin: 8px 0 4px; font-size: 15px; letter-spacing: 2px; font-weight: bold; }
+  .ship-card .desc { font-size: 11.5px; opacity: .8; min-height: 30px; line-height: 1.4; }
+  .stat-row { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 3px; }
+  .stat-row .lbl { width: 18px; text-align: center; opacity: .85; }
+  .stat-row .sbar { flex: 1; height: 6px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.2); border-radius: 3px; overflow: hidden; }
+  .stat-row .sbar > div { height: 100%; background: #e8a33d; }
 </style>
 <script type="importmap">
 {
@@ -74,6 +87,7 @@
   <p>移动鼠标 —— 环绕视角</p>
   <p>鼠标左键 / Q —— 左舷齐射　　鼠标右键 / E —— 右舷齐射</p>
   <p>把敌船引到舷侧再开火，击沉它们！</p>
+  <div id="ship-select"></div>
   <button id="start-btn">出 航</button>
 </div>
 

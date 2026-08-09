@@ -2,10 +2,10 @@
 import * as THREE from 'three';
 import { createWater, getWaveHeight } from './water.js';
 import { createSky, SUN_DIR } from './sky.js';
-import { Ship } from './ship.js';
+import { Ship, buildShipModel } from './ship.js';
 import { Combat } from './combat.js';
 import { EnemyFleet } from './enemy.js';
-import { loadShipModel, instantiateShip } from './modelship.js';
+import { loadShipModel, instantiateShip, SHIP_MODELS, DEFAULT_SHIP_ID, BASE_LENGTH } from './modelship.js';
 
 // ===== 渲染器 / 场景 / 相机 =====
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -43,23 +43,64 @@ const player = new Ship(scene, {
 // ===== 敌人 =====
 const fleet = new EnemyFleet(scene, combat);
 
-// ===== 真实帆船模型：异步加载，完成后替换玩家/敌船外观；失败则保持程序化船 =====
-const ENEMY_TINT = { hull: 0x6a7280, sail: 0x9e3030 }; // 深灰船体 + 暗红帆
-loadShipModel().then((template) => {
-  if (!template) return; // 加载失败，回退程序化船
-  const factory = (tint) => instantiateShip(template, tint);
-  // 玩家船
-  const pv = factory(null);
-  player.setVisual(pv.group, pv.setSailAmount);
-  player.setSailAmount(sailLevel / 3);
-  // 敌船工厂（后续新生成的敌船用），并把已在场的敌船一并换装
-  fleet.visualFactory = factory;
-  fleet.enemyTint = ENEMY_TINT;
-  for (const e of fleet.enemies) {
-    const v = factory(ENEMY_TINT);
-    e.setVisual(v.group, v.setSailAmount);
+// ===== 玩家选船：读 sessionStorage 恢复上次选择，按需加载选中的模型 =====
+const STORAGE_KEY = 'waters-ship';
+let selectedShipId = sessionStorage.getItem(STORAGE_KEY) || DEFAULT_SHIP_ID;
+if (!SHIP_MODELS[selectedShipId]) selectedShipId = DEFAULT_SHIP_ID;
+let choiceToken = 0; // 防止快速切换时旧请求后到账覆盖新选择
+
+function applyShipChoice(id) {
+  const def = SHIP_MODELS[id];
+  // 属性差异
+  player.maxHp = def.stats.hp;
+  player.hp = def.stats.hp;
+  player.maxSpeed = def.stats.maxSpeed;
+  player.turnRate = def.stats.turnRate;
+  player.cannons = def.stats.cannons;
+  player.lengthScale = def.targetLength / BASE_LENGTH;
+  player.hitRadius = 3.4 * player.lengthScale;
+  // 异步换装；失败回退程序化船
+  const tok = ++choiceToken;
+  loadShipModel(id).then((template) => {
+    if (tok !== choiceToken) return;
+    if (!template) {
+      const m = buildShipModel({ hullColor: 0x7a4f2a, sailColor: 0xf3ead5 });
+      player.setVisual(m.group, m.setSailAmount);
+    } else {
+      const v = instantiateShip(template, null);
+      player.setVisual(v.group, v.setSailAmount);
+    }
+    player.setSailAmount(sailLevel / 3);
+  });
+}
+
+// ===== 选船卡片 UI（开始遮罩内） =====
+function statBar(label, ratio) {
+  return `<div class="stat-row"><span class="lbl">${label}</span>` +
+    `<span class="sbar"><div style="width:${Math.round(ratio * 100)}%"></div></span></div>`;
+}
+
+function buildShipCards() {
+  const wrap = $('ship-select');
+  for (const [id, def] of Object.entries(SHIP_MODELS)) {
+    const card = document.createElement('div');
+    card.className = 'ship-card' + (id === selectedShipId ? ' selected' : '');
+    card.dataset.ship = id;
+    card.innerHTML =
+      `<img src="${def.thumb}" alt="${def.name}">` +
+      `<h3>${def.name}</h3>` +
+      `<div class="desc">${def.desc}</div>` +
+      statBar('血', def.bars.hp) + statBar('速', def.bars.speed) + statBar('炮', def.bars.cannons);
+    card.addEventListener('click', () => {
+      selectedShipId = id;
+      sessionStorage.setItem(STORAGE_KEY, id);
+      wrap.querySelectorAll('.ship-card').forEach((c) =>
+        c.classList.toggle('selected', c.dataset.ship === id));
+      applyShipChoice(id);
+    });
+    wrap.appendChild(card);
   }
-});
+}
 
 // ===== 游戏状态 =====
 let state = 'menu'; // menu | playing | over
@@ -83,6 +124,10 @@ function updateHUD() {
   $('reload-l').style.width = `${(1 - cooldownL / RELOAD_TIME) * 100}%`;
   $('reload-r').style.width = `${(1 - cooldownR / RELOAD_TIME) * 100}%`;
 }
+
+// 初始化选船界面并应用上次选择（需在 $ / sailLevel 声明之后调用）
+buildShipCards();
+applyShipChoice(selectedShipId);
 
 // ===== 输入 =====
 const keys = {};

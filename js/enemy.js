@@ -1,9 +1,13 @@
 // 敌方 AI 船队：远处生成、接近、环绕、舷侧齐射；被击沉后延迟补充，难度随波次提升
 import * as THREE from 'three';
 import { Ship } from './ship.js';
+import { loadShipModel, instantiateShip, SHIP_MODELS, BASE_LENGTH } from './modelship.js';
 
-const ENEMY_HULL = 0x3a3f4a; // 深灰船体
+const ENEMY_HULL = 0x3a3f4a; // 深灰船体（程序化回退用）
 const ENEMY_SAIL = 0x9e3030; // 暗红帆，辨识度
+const ENEMY_TINT = { hull: 0x6a7280, sail: 0x9e3030 }; // 真实模型染色
+// 敌船可用的模型池（不含玩家专属的 pinnace）
+const ENEMY_POOL = ['dutch_ship_medium', 'dutch_ship_large_01', 'dutch_ship_large_02'];
 
 export class EnemyFleet {
   constructor(scene, combat) {
@@ -13,8 +17,6 @@ export class EnemyFleet {
     this.respawnTimers = [];  // 待补充的倒计时
     this.wave = 1;
     this.killsThisWave = 0;
-    this.visualFactory = null; // 真实模型外观工厂（加载完成后由 main 注入）
-    this.enemyTint = null;
   }
 
   get targetCount() {
@@ -35,11 +37,15 @@ export class EnemyFleet {
     ship.heading = angle + Math.PI; // 大致朝玩家
     ship.orbitDir = Math.random() < 0.5 ? 1 : -1; // 环绕方向
     ship.cooldown = 2 + Math.random() * 3;
-    // 真实模型可用则直接换装（染色版）
-    if (this.visualFactory) {
-      const v = this.visualFactory(this.enemyTint);
+    // 随机选一款敌船模型：先按目标尺寸调整浮力/命中尺度，再异步换装（染敌色）
+    const modelId = ENEMY_POOL[Math.floor(Math.random() * ENEMY_POOL.length)];
+    ship.lengthScale = SHIP_MODELS[modelId].targetLength / BASE_LENGTH;
+    ship.hitRadius = 3.4 * ship.lengthScale;
+    loadShipModel(modelId).then((template) => {
+      if (!template || ship.dead) return; // 加载失败保持程序化船
+      const v = instantiateShip(template, ENEMY_TINT);
       ship.setVisual(v.group, v.setSailAmount);
-    }
+    });
     this.enemies.push(ship);
   }
 

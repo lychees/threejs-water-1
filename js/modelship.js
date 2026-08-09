@@ -1,15 +1,55 @@
-// 真实帆船模型（Poly Haven CC0 dutch_ship_medium）的加载、校正、克隆与染色
-// 加载全局只发生一次（Promise 缓存）；失败时 resolve(null)，调用方回退程序化船
+// 船模注册表（均为 Poly Haven CC0）+ 按需加载 / 校正 / 克隆 / 染色
+// 每个模型独立 Promise 缓存，只加载被选中的；失败时 resolve(null)，调用方回退程序化船
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 
-const MODEL_URL = 'models/dutch_ship_medium/dutch_ship_medium_2k.gltf';
+// stats：玩家船属性（敌船仍用基准值）；bars：选船界面的属性条（0~1 相对值）
+export const SHIP_MODELS = {
+  dutch_ship_medium: {
+    name: '中型帆船',
+    desc: '均衡的战船，攻守兼备',
+    path: 'models/dutch_ship_medium/dutch_ship_medium_2k.gltf',
+    thumb: 'models/dutch_ship_medium/thumb.png',
+    targetLength: 9.0,
+    stats: { hp: 100, maxSpeed: 15, turnRate: 1.0, cannons: 3 },
+    bars: { hp: 0.6, speed: 0.6, cannons: 0.6 },
+  },
+  dutch_ship_large_01: {
+    name: '大型战列舰',
+    desc: '血厚炮多，但迟缓笨重',
+    path: 'models/dutch_ship_large_01/dutch_ship_large_01_1k.gltf',
+    thumb: 'models/dutch_ship_large_01/thumb.png',
+    targetLength: 13.0,
+    stats: { hp: 150, maxSpeed: 12.5, turnRate: 0.8, cannons: 4 },
+    bars: { hp: 1.0, speed: 0.45, cannons: 1.0 },
+  },
+  dutch_ship_large_02: {
+    name: '武装商船',
+    desc: '装甲厚实的多面手',
+    path: 'models/dutch_ship_large_02/dutch_ship_large_02_1k.gltf',
+    thumb: 'models/dutch_ship_large_02/thumb.png',
+    targetLength: 12.0,
+    stats: { hp: 135, maxSpeed: 13.5, turnRate: 0.85, cannons: 4 },
+    bars: { hp: 0.85, speed: 0.55, cannons: 0.9 },
+  },
+  ship_pinnace: {
+    name: '轻型快船',
+    desc: '快而脆，走位决定生死',
+    path: 'models/ship_pinnace/ship_pinnace_1k.gltf',
+    thumb: 'models/ship_pinnace/thumb.png',
+    targetLength: 7.5,
+    stats: { hp: 70, maxSpeed: 19.5, turnRate: 1.3, cannons: 2 },
+    bars: { hp: 0.35, speed: 1.0, cannons: 0.35 },
+  },
+};
 
-// 校正目标：与程序化船保持一致的水线尺度（船长 ~9、龙骨吃水 ~-1.3、船头朝 +Z）
-const TARGET_LENGTH = 9.0;
-const HULL_BOTTOM = -1.3;
+export const DEFAULT_SHIP_ID = 'dutch_ship_medium';
 
-let modelPromise = null;
+// 基准船长（中型帆船），其余船按 targetLength / BASE_LENGTH 得到 lengthScale
+export const BASE_LENGTH = 9.0;
+
+const cache = new Map(); // id -> Promise<template|null>
 
 // 自顶向下更新矩阵后测量包围盒（旋转/平移在校正层上，必须从顶层刷新）
 function measure(container) {
@@ -40,8 +80,8 @@ function guessBowAtPositiveZ(root, box) {
   return frontSum / frontN >= backSum / backN;
 }
 
-// 把原始模型包进校正容器：长轴对齐 Z、船头朝 +Z、缩放、吃水线对齐
-function normalizeModel(gltfScene) {
+// 把原始模型包进校正容器：长轴对齐 Z、船头朝 +Z、缩放到目标船长、龙骨对齐吃水
+function normalizeModel(gltfScene, targetLength) {
   const container = new THREE.Group(); // 对外：原点即水线中心，船头 +Z
   const inner = new THREE.Group();     // 校正层：旋转 + 缩放
   const root = gltfScene;
@@ -65,14 +105,14 @@ function normalizeModel(gltfScene) {
 
   // 3. 缩放到目标船长
   const len = box.max.z - box.min.z;
-  const s = TARGET_LENGTH / len;
+  const s = targetLength / len;
   inner.scale.setScalar(s);
 
-  // 4. 平移：水平居中、龙骨贴到 HULL_BOTTOM
+  // 4. 平移：水平居中、龙骨贴到吃水深度（随船长比例加深）
   const cx = (box.min.x + box.max.x) / 2;
   const cz = (box.min.z + box.max.z) / 2;
   root.position.set(-cx, -box.min.y, -cz);
-  inner.position.y = HULL_BOTTOM;
+  inner.position.y = -0.145 * targetLength;
 
   // 5. 帆材质修复：alpha 贴图改 alphaTest 裁剪，避免透明排序异常
   root.traverse((o) => {
@@ -96,40 +136,42 @@ function normalizeModel(gltfScene) {
 }
 
 /**
- * 加载模型（只加载一次）
+ * 按需加载指定船模（每个 id 只加载一次）
  * @returns {Promise<THREE.Group|null>} 校正后的模板容器；失败为 null
  */
-export function loadShipModel() {
-  if (!modelPromise) {
-    modelPromise = new Promise((resolve) => {
+export function loadShipModel(id) {
+  const def = SHIP_MODELS[id];
+  if (!def) return Promise.resolve(null);
+  if (!cache.has(id)) {
+    cache.set(id, new Promise((resolve) => {
       new GLTFLoader().load(
-        MODEL_URL,
+        def.path,
         (gltf) => {
-          const template = normalizeModel(gltf.scene);
+          const template = normalizeModel(gltf.scene, def.targetLength);
           console.info(
-            `[ship-model] 原始船长 ${template.userData.rawLength.toFixed(2)}，缩放系数 ${template.userData.scale.toFixed(4)}`
+            `[ship-model] ${id} 原始船长 ${template.userData.rawLength.toFixed(2)}，缩放系数 ${template.userData.scale.toFixed(4)}`
           );
           resolve(template);
         },
         undefined,
         (err) => {
-          console.warn('[ship-model] 模型加载失败，回退程序化船：', err);
+          console.warn(`[ship-model] ${id} 加载失败，回退程序化船：`, err);
           resolve(null);
         }
       );
-    });
+    }));
   }
-  return modelPromise;
+  return cache.get(id);
 }
 
 /**
- * 从模板克隆一艘船
+ * 从模板克隆一艘船（统一走 SkeletonUtils.clone，兼容带骨骼的 pinnace）
  * @param {THREE.Group} template loadShipModel 得到的模板
  * @param {object|null} tint 染色 { hull, sail }（十六进制），null 保持原色
  * @returns {{ group: THREE.Group, setSailAmount: Function|null }}
  */
 export function instantiateShip(template, tint) {
-  const inst = template.clone(true); // 默认共享 geometry / texture，省显存
+  const inst = skeletonClone(template); // 共享 geometry / texture，省显存
 
   // 染色需要独立材质（clone 出来的材质仍共享贴图）
   if (tint) {

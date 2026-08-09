@@ -3,8 +3,8 @@ import * as THREE from 'three';
 
 const WORLD_LIMIT = 430; // 活动范围半径，超出会被挡回
 
-// 构建一艘帆船（前进方向为本地 +z），返回 Group
-function buildShipModel({ hullColor, sailColor }) {
+// 构建一艘帆船（前进方向为本地 +z），返回 Group；也是真实模型加载失败时的回退外观
+export function buildShipModel({ hullColor, sailColor }) {
   const group = new THREE.Group();
   const woodMat = new THREE.MeshStandardMaterial({ color: hullColor, flatShading: true, roughness: 0.9 });
   const deckMat = new THREE.MeshStandardMaterial({ color: 0xc9a86a, flatShading: true, roughness: 0.95 });
@@ -106,6 +106,8 @@ export class Ship {
       hp = 100,
       maxSpeed = 15,
       turnRate = 1.0,
+      cannons = 3,        // 每侧舷炮数量
+      lengthScale = 1,    // 相对基准船长（9m）的倍数，影响浮力采样与命中半径
     } = opts;
 
     // group 是纯变换节点（浮力/朝向都作用在它上面），外观作为子节点可整体替换
@@ -124,6 +126,9 @@ export class Ship {
     this.hp = hp;
     this.maxSpeed = maxSpeed;
     this.turnRate = turnRate;
+    this.cannons = cannons;
+    this.lengthScale = lengthScale;
+    this.hitRadius = 3.4 * lengthScale; // 与 combat.js 的基准命中半径一致
 
     this.heading = 0;   // 朝向角：forward = (sin, 0, cos)
     this.speed = 0;
@@ -186,17 +191,18 @@ export class Ship {
       return;
     }
 
-    // ---- 浮力：采样船头/船尾/左舷/右舷四点波高 ----
+    // ---- 浮力：采样船头/船尾/左舷/右舷四点波高（随船长缩放） ----
+    const ls = this.lengthScale;
     const sinH = Math.sin(this.heading);
     const cosH = Math.cos(this.heading);
-    const hBow = waveFn(p.x + sinH * 3.5, p.z + cosH * 3.5, time);
-    const hStern = waveFn(p.x - sinH * 3.5, p.z - cosH * 3.5, time);
-    const hPort = waveFn(p.x - cosH * 2.0, p.z + sinH * 2.0, time);
-    const hStar = waveFn(p.x + cosH * 2.0, p.z - sinH * 2.0, time);
+    const hBow = waveFn(p.x + sinH * 3.5 * ls, p.z + cosH * 3.5 * ls, time);
+    const hStern = waveFn(p.x - sinH * 3.5 * ls, p.z - cosH * 3.5 * ls, time);
+    const hPort = waveFn(p.x - cosH * 2.0 * ls, p.z + sinH * 2.0 * ls, time);
+    const hStar = waveFn(p.x + cosH * 2.0 * ls, p.z - sinH * 2.0 * ls, time);
 
     const targetY = (hBow + hStern + hPort + hStar) / 4 + this.baseY;
-    const targetPitch = Math.atan2(hStern - hBow, 7.0);
-    const targetRoll = Math.atan2(hStar - hPort, 4.0);
+    const targetPitch = Math.atan2(hStern - hBow, 7.0 * ls);
+    const targetRoll = Math.atan2(hStar - hPort, 4.0 * ls);
 
     // 平滑插值，漂浮感
     const k = 1 - Math.exp(-3 * dt);

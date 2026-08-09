@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 
 const BALL_GRAVITY = 18;   // 炮弹重力（比真实大，手感更 arcade）
-const HIT_RADIUS = 3.4;    // 船体命中半径
+const HIT_RADIUS = 3.4;    // 基准船体命中半径（船长 9m 基准，大船按 lengthScale 放大）
 
 // ---- 一次性粒子簇 ----
 class Burst {
@@ -100,7 +100,7 @@ export class Combat {
    * @param {number} side -1 左舷 / +1 右舷
    */
   fireBroadside(ship, side, opts = {}) {
-    const { count = 3, speed = 30, spread = 0.06, fromPlayer = true } = opts;
+    const { count = ship.cannons ?? 3, speed = 30, spread = 0.06, fromPlayer = true } = opts;
     // 舷侧方向：右舷 = (cos h, 0, -sin h)
     const dir = new THREE.Vector3(side * Math.cos(ship.heading), 0, -side * Math.sin(ship.heading));
     const fwd = ship.forward;
@@ -187,9 +187,10 @@ export class Combat {
           if (t.isPlayer === b.fromPlayer) continue; // 不打自己人
           if (t.ship.sinking) continue;
           const sp = t.ship.position;
+          const hr = t.ship.hitRadius || HIT_RADIUS;
           const dx = pos.x - sp.x;
           const dz = pos.z - sp.z;
-          if (dx * dx + dz * dz < HIT_RADIUS * HIT_RADIUS && pos.y > sp.y - 1.5 && pos.y < sp.y + 6) {
+          if (dx * dx + dz * dz < hr * hr && pos.y > sp.y - 1.5 && pos.y < sp.y + 6) {
             this.explosion(pos.clone());
             onHit(b, t);
             dead = true;
