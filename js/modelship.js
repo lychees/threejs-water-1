@@ -21,6 +21,7 @@ export const SHIP_MODELS = {
     path: 'models/dutch_ship_large_01/dutch_ship_large_01_1k.gltf',
     thumb: 'models/dutch_ship_large_01/thumb.png',
     targetLength: 13.0,
+    flip: true, // 实测船头反向：反转启发式的判断结果
     stats: { hp: 150, maxSpeed: 12.5, turnRate: 0.8, cannons: 4 },
     bars: { hp: 1.0, speed: 0.45, cannons: 1.0 },
   },
@@ -30,6 +31,7 @@ export const SHIP_MODELS = {
     path: 'models/dutch_ship_large_02/dutch_ship_large_02_1k.gltf',
     thumb: 'models/dutch_ship_large_02/thumb.png',
     targetLength: 12.0,
+    flip: true, // 实测船头反向
     stats: { hp: 135, maxSpeed: 13.5, turnRate: 0.85, cannons: 4 },
     bars: { hp: 0.85, speed: 0.55, cannons: 0.9 },
   },
@@ -39,6 +41,7 @@ export const SHIP_MODELS = {
     path: 'models/ship_pinnace/ship_pinnace_1k.gltf',
     thumb: 'models/ship_pinnace/thumb.png',
     targetLength: 7.5,
+    flip: true, // 实测船头反向
     stats: { hp: 70, maxSpeed: 19.5, turnRate: 1.3, cannons: 2 },
     bars: { hp: 0.35, speed: 1.0, cannons: 0.35 },
   },
@@ -81,7 +84,7 @@ function guessBowAtPositiveZ(root, box) {
 }
 
 // 把原始模型包进校正容器：长轴对齐 Z、船头朝 +Z、缩放到目标船长、龙骨对齐吃水
-function normalizeModel(gltfScene, targetLength) {
+function normalizeModel(gltfScene, targetLength, flip = null) {
   const container = new THREE.Group(); // 对外：原点即水线中心，船头 +Z
   const inner = new THREE.Group();     // 校正层：旋转 + 缩放
   const root = gltfScene;
@@ -97,8 +100,10 @@ function normalizeModel(gltfScene, targetLength) {
     size = box.getSize(new THREE.Vector3());
   }
 
-  // 2. 船头方向校正（需要时绕 Y 转 180°）
-  if (!guessBowAtPositiveZ(root, box)) {
+  // 2. 船头方向校正：flip=true 表示启发式判断错了，取其反（需要时绕 Y 转 180°）
+  const heuristicFlip = !guessBowAtPositiveZ(root, box);
+  const needFlip = flip ? !heuristicFlip : heuristicFlip;
+  if (needFlip) {
     inner.rotation.y += Math.PI;
     box = measure(container);
   }
@@ -147,7 +152,7 @@ export function loadShipModel(id) {
       new GLTFLoader().load(
         def.path,
         (gltf) => {
-          const template = normalizeModel(gltf.scene, def.targetLength);
+          const template = normalizeModel(gltf.scene, def.targetLength, def.flip ?? null);
           console.info(
             `[ship-model] ${id} 原始船长 ${template.userData.rawLength.toFixed(2)}，缩放系数 ${template.userData.scale.toFixed(4)}`
           );
