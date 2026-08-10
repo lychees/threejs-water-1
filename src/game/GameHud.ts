@@ -36,6 +36,10 @@ export class GameHud {
   private readonly reloadB: HTMLElement;
   private readonly killsEl: HTMLElement;
   private readonly waveEl: HTMLElement;
+  private readonly lootEl: HTMLElement;
+  private readonly debuffFire: HTMLElement;
+  private readonly debuffLeak: HTMLElement;
+  private readonly debuffSail: HTMLElement;
   private readonly overEl: HTMLElement;
   private readonly overKills: HTMLElement;
   private readonly ehpPool: { el: HTMLElement; fill: HTMLElement }[] = [];
@@ -63,17 +67,29 @@ export class GameHud {
     this.reloadR = mkReload('右舷 E');
     this.reloadB = mkReload('艏炮 ␣');
 
+    // ---- 玩家 debuff 图标（带剩余秒数；无 debuff 时占位空串） ----
+    const debuffs = el('div', 'ghud__debuffs');
+    this.debuffFire = el('span', 'ghud__debuff', '');
+    this.debuffLeak = el('span', 'ghud__debuff', '');
+    this.debuffSail = el('span', 'ghud__debuff', '');
+    debuffs.append(this.debuffFire, this.debuffLeak, this.debuffSail);
+    status.append(debuffs);
+
     // ---- 右上：战绩 ----
     const score = el('section', 'ghud ghud--score');
     score.setAttribute('aria-label', 'Score');
     this.killsEl = el('span', 'ghud__num', '0');
     this.waveEl = el('span', 'ghud__num', '1');
+    this.lootEl = el('span', 'ghud__num', '0');
     score.append(
       el('span', 'ghud__label', '击沉 '),
       this.killsEl,
       el('span', 'ghud__sep', ' · '),
       el('span', 'ghud__label', '波次 '),
       this.waveEl,
+      el('span', 'ghud__sep', ' · '),
+      el('span', 'ghud__label', '战利品 '),
+      this.lootEl,
     );
 
     // ---- Game Over 遮罩 ----
@@ -107,10 +123,12 @@ export class GameHud {
     reloadMax: { broadside: number; bow: number },
     kills: number,
     wave: number,
+    loot = 0,
   ): void {
     this.hpFill.style.width = `${(player.hp / player.maxHp) * 100}%`;
     this.killsEl.textContent = String(kills);
     this.waveEl.textContent = String(wave);
+    this.lootEl.textContent = String(loot);
     this.sailState.textContent =
       sailAmount < 0
         ? `帆位：倒车 ${Math.round(-sailAmount * 100)}%（W 复位）`
@@ -119,6 +137,10 @@ export class GameHud {
     this.reloadL.style.width = `${(1 - cooldowns.l / reloadMax.broadside) * 100}%`;
     this.reloadR.style.width = `${(1 - cooldowns.r / reloadMax.broadside) * 100}%`;
     this.reloadB.style.width = `${(1 - cooldowns.bow / reloadMax.bow) * 100}%`;
+    // 玩家 debuff 图标（带剩余秒数）
+    this.debuffFire.textContent = player.debuff.fire > 0 ? `🔥 ${Math.ceil(player.debuff.fire)}s` : '';
+    this.debuffLeak.textContent = player.debuff.leak > 0 ? `💧 ${Math.ceil(player.debuff.leak)}s` : '';
+    this.debuffSail.textContent = player.debuff.sail > 0 ? `⛵ ${Math.ceil(player.debuff.sail)}s` : '';
   }
 
   /** 屏幕下方中央的提示飘字（天气切换、拾取等）。 */

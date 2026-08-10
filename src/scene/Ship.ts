@@ -133,6 +133,22 @@ export class Ship {
   }
 
   /**
+   * 显示/隐藏 glTF 船模本体。阶段 B2：选程序化船型时玩家船外观由 Shipyard
+   * 生成，基座模型隐藏但 Ship 包装（object/探针/相机与尾迹读取）保持不变。
+   */
+  setModelVisible(v: boolean): void {
+    this.model.visible = v;
+  }
+
+  /**
+   * 缩放 glTF 船模。模型归一化到 27m（TARGET_HULL_LENGTH），选船系统按
+   * 所选船长 / 27 换算；浮力/命中尺度由 GameShip 的 lengthScale 另算。
+   */
+  setModelScale(scale: number): void {
+    this.model.scale.setScalar(scale);
+  }
+
+  /**
    * World heading of the bow, in radians, as
    * `atan2(forward.z, forward.x)` — the convention `Wake.emit()` expects.
    */

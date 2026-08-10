@@ -1,27 +1,10 @@
 /**
- * 玩家属性与操控/战斗手感参数，集中一处。
+ * 操控/战斗手感参数，集中一处。
  *
- * 数值照抄旧版（js/main.js、js/ship.js），是 B1 的手感基线；
- * B2 接 25 船（assets/ships.json）时把 PLAYER_STATS 换成按船 id 查表即可，
- * 引用方不需要跟着改。
+ * 数值照抄旧版（js/main.js），是 B1/B2 的手感基线。
+ * 玩家属性（hp/极速/舵率/炮数）自 B2 起由 Shipyard 的 25 船表 +
+ * ships.json 映射提供（见 Shipyard.ts 的 computeStats / loadShipStats）。
  */
-
-export interface PlayerStats {
-  maxHp: number;
-  /** 满帆极速，m/s。 */
-  maxSpeed: number;
-  /** 满舵效角速度，rad/s。 */
-  turnRate: number;
-  /** 每侧舷炮数量。 */
-  cannons: number;
-}
-
-export const PLAYER_STATS: PlayerStats = {
-  maxHp: 100,
-  maxSpeed: 15,
-  turnRate: 1.0,
-  cannons: 3,
-};
 
 /** 操控与火炮手感（旧 js/main.js 顶部常量区）。 */
 export const FEEL = {

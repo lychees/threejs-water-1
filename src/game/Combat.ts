@@ -241,8 +241,33 @@ export class Combat {
     );
   }
 
-  splash(pos: THREE.Vector3): void {
+  /** 着火持续火焰（debuff 视觉）：火舌 + 黑烟。 */
+  firePuff(pos: THREE.Vector3): void {
     this.bursts.push(
+      new Burst(this.scene, pos, {
+        count: this.n(6),
+        color: 0xff7a20,
+        speed: 1.0,
+        up: 3,
+        life: 0.7,
+        size: 1.5,
+        gravity: -3,
+      }),
+    );
+    this.bursts.push(
+      new Burst(this.scene, pos, {
+        count: this.n(4),
+        color: 0x444444,
+        speed: 0.8,
+        up: 2,
+        life: 1.2,
+        size: 2.0,
+        gravity: -1,
+      }),
+    );
+  }
+
+  splash(pos: THREE.Vector3): void {    this.bursts.push(
       new Burst(this.scene, pos, {
         count: this.n(22),
         color: 0xeaf7ff,

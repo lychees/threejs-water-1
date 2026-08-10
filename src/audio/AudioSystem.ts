@@ -515,6 +515,17 @@ const UI_CLICK_FALL = 0.62;
 const UI_CLICK_SECONDS = 0.045;
 const UI_CLICK_LEVEL = 0.13;
 
+/** Combat one-shots for the game layer (src/game). Old js/audio.js voicings. */
+const CANNON_SECONDS = 0.35;
+const CANNON_LEVEL = 0.9;
+const CANNON_LOWPASS_HZ = 300;
+const CANNON_BOOM_HZ = 55;
+const HIT_SECONDS = 0.3;
+const HIT_LEVEL = 0.7;
+const HIT_BANDPASS_HZ = 350;
+const HIT_TONE_HZ = 120;
+const PICKUP_LEVEL = 0.3;
+
 // --- gulls -----------------------------------------------------------------
 //
 // The hardest thing in this file to keep on the right side of the line between a
@@ -1435,6 +1446,109 @@ export class AudioSystem {
     osc.start(now);
     osc.stop(now + UI_CLICK_SECONDS + 0.01);
     this.trackVoice(osc, gain);
+  }
+
+  /**
+   * Broadside/bow gun report. A world sound (airBus), so it muffles underwater
+   * like thunder does. Voicing from the legacy game's cannon(): a low-passed
+   * noise burst for the muzzle blast over a 55 Hz boom.
+   */
+  playCannon(): void {
+    const ctx = this.ctx;
+    if (ctx === null || !this.canPlay()) return;
+    if (!this.acquireVoice()) return;
+
+    const random = this.oneShotRandom;
+    const now = ctx.currentTime;
+
+    const blast = ctx.createBufferSource();
+    blast.buffer = this.white;
+    blast.loop = true;
+    blast.playbackRate.value = 0.6 + 0.2 * random();
+    const lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    lowpass.frequency.value = CANNON_LOWPASS_HZ;
+    const blastGain = ctx.createGain();
+    envelope(blastGain.gain, now, 0.004, CANNON_LEVEL, CANNON_SECONDS);
+    blast.connect(lowpass);
+    lowpass.connect(blastGain);
+    blastGain.connect(this.airBus);
+    blast.start(now, random() * this.white.duration);
+    blast.stop(now + CANNON_SECONDS + 0.05);
+
+    const boom = ctx.createOscillator();
+    boom.type = 'sine';
+    boom.frequency.value = CANNON_BOOM_HZ;
+    const boomGain = ctx.createGain();
+    envelope(boomGain.gain, now, 0.006, CANNON_LEVEL * 0.65, CANNON_SECONDS);
+    boom.connect(boomGain);
+    boomGain.connect(this.airBus);
+    boom.start(now);
+    boom.stop(now + CANNON_SECONDS + 0.05);
+
+    this.trackVoice(blast, lowpass, blastGain, boom, boomGain);
+  }
+
+  /** A ball finding a hull: band-passed knock over a low triangle thud. */
+  playHit(): void {
+    const ctx = this.ctx;
+    if (ctx === null || !this.canPlay()) return;
+    if (!this.acquireVoice()) return;
+
+    const random = this.oneShotRandom;
+    const now = ctx.currentTime;
+
+    const knock = ctx.createBufferSource();
+    knock.buffer = this.white;
+    knock.loop = true;
+    knock.playbackRate.value = 0.9 + 0.2 * random();
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = HIT_BANDPASS_HZ;
+    band.Q.value = 1.1;
+    const knockGain = ctx.createGain();
+    envelope(knockGain.gain, now, 0.003, HIT_LEVEL, HIT_SECONDS);
+    knock.connect(band);
+    band.connect(knockGain);
+    knockGain.connect(this.airBus);
+    knock.start(now, random() * this.white.duration);
+    knock.stop(now + HIT_SECONDS + 0.05);
+
+    const thud = ctx.createOscillator();
+    thud.type = 'triangle';
+    thud.frequency.value = HIT_TONE_HZ;
+    const thudGain = ctx.createGain();
+    envelope(thudGain.gain, now, 0.004, HIT_LEVEL * 0.55, HIT_SECONDS * 0.7);
+    thud.connect(thudGain);
+    thudGain.connect(this.airBus);
+    thud.start(now);
+    thud.stop(now + HIT_SECONDS);
+
+    this.trackVoice(knock, band, knockGain, thud, thudGain);
+  }
+
+  /** Pickup chime: two rising triangle notes. A UI sound — never muffled. */
+  playPickup(): void {
+    const ctx = this.ctx;
+    if (ctx === null || !this.canPlay()) return;
+    if (!this.acquireVoice()) return;
+
+    const now = ctx.currentTime;
+    for (const [freq, at, dur] of [
+      [660, 0, 0.12],
+      [880, 0.1, 0.18],
+    ] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      const gain = ctx.createGain();
+      envelope(gain.gain, now + at, 0.004, PICKUP_LEVEL, dur);
+      osc.connect(gain);
+      gain.connect(this.uiBus);
+      osc.start(now + at);
+      osc.stop(now + at + dur + 0.05);
+      this.trackVoice(osc, gain);
+    }
   }
 
   /**

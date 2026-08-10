@@ -3,6 +3,7 @@ import {
   type QualityTier,
   type RendererBackend,
 } from './types.ts';
+import { buildShipSelect } from '../game/ShipSelect';
 
 const STORAGE_KEY = 'web-ocean:start-selection:v1';
 
@@ -233,6 +234,7 @@ function renderGate(
     backendGroup,
     qualityLabel,
     qualityGroup,
+    buildShipSelect(),
     probeReadout,
     start,
   );

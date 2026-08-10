@@ -23,6 +23,15 @@ const WORLD_LIMIT = 760; // 活动范围半径（远岛在 ~700m 外），超出
 
 export type WaveHeightAt = (x: number, z: number) => number;
 
+export type DebuffKind = 'fire' | 'leak' | 'sail';
+
+/** 命中 debuff 数值表（独立判定，重复触发刷新时间，沉船时清除）。旧 js/ship.js 同表。 */
+export const DEBUFF_DEFS = {
+  fire: { chance: 0.15, duration: 8, dps: 2, label: '着火' }, // 持续掉血
+  leak: { chance: 0.15, duration: 20, speedMul: 0.7, damageTakenMul: 1.25, label: '漏水' }, // 减速+易伤
+  sail: { chance: 0.2, duration: 15, maxSail: 0.5, speedMul: 0.6, label: '破帆' }, // 帆量上限+减速
+} as const;
+
 export interface GameShipOptions {
   maxHp: number;
   maxSpeed: number;
@@ -61,11 +70,12 @@ export class GameShip {
   hurtT = 0; // 被玩家攻击后血条显示剩余秒数（Game 驱动）
   cid = 0; // 碰撞结算冷却用的配对 id（Game 分配）
 
+  /** 各 debuff 剩余秒数。 */
+  readonly debuff: Record<DebuffKind, number> = { fire: 0, leak: 0, sail: 0 };
+
   /** AI 附加状态（敌船用，玩家忽略）。 */
   orbitDir: 1 | -1 = 1;
   cooldown = 0;
-  /** 基座外观包装（帆面鼓动动画）；玩家由 App 自己驱动，敌船由舰队驱动。 */
-  visual: { update(dt: number): void } | null = null;
 
   private readonly scratchForward = new THREE.Vector3();
 
@@ -89,11 +99,38 @@ export class GameShip {
     return this.scratchForward.set(Math.sin(this.heading), 0, Math.cos(this.heading));
   }
 
+  /** 速度乘区（漏水 ×0.7、破帆 ×0.6，乘法叠加）。 */
+  get speedMul(): number {
+    let m = 1;
+    if (this.debuff.leak > 0) m *= DEBUFF_DEFS.leak.speedMul;
+    if (this.debuff.sail > 0) m *= DEBUFF_DEFS.sail.speedMul;
+    return m;
+  }
+
+  /** 帆量上限（破帆时压到 50%）。 */
+  get sailCap(): number {
+    return this.debuff.sail > 0 ? DEBUFF_DEFS.sail.maxSail : 1;
+  }
+
+  /** 命中后按概率独立判定 debuff，返回本次触发的 key 列表。skipFire：大雨灭火。 */
+  rollDebuffs(skipFire = false): DebuffKind[] {
+    const applied: DebuffKind[] = [];
+    for (const key of Object.keys(DEBUFF_DEFS) as DebuffKind[]) {
+      if (key === 'fire' && skipFire) continue;
+      if (Math.random() < DEBUFF_DEFS[key].chance) {
+        this.debuff[key] = DEBUFF_DEFS[key].duration; // 重复触发刷新时间
+        applied.push(key);
+      }
+    }
+    return applied;
+  }
+
   startSinking(): void {
     if (this.sinking) return;
     this.sinking = true;
     this.sinkT = 0;
     this.sinkDir = Math.random() < 0.5 ? 1 : -1;
+    this.debuff.fire = this.debuff.leak = this.debuff.sail = 0; // 沉船清除 debuff
   }
 
   /** 复位到可玩状态（R 重开）。 */
@@ -106,6 +143,7 @@ export class GameShip {
     this.pitch = 0;
     this.roll = 0;
     this.hurtT = 0;
+    this.debuff.fire = this.debuff.leak = this.debuff.sail = 0;
     this.position.set(0, 0, 0);
     this.heading = 0;
     this.applyPose();
@@ -114,6 +152,7 @@ export class GameShip {
   /** 返回 true = 这一击把船打沉了。 */
   takeDamage(dmg: number): boolean {
     if (this.sinking) return false;
+    if (this.debuff.leak > 0) dmg *= DEBUFF_DEFS.leak.damageTakenMul; // 漏水易伤
     this.hp -= dmg;
     if (this.hp <= 0) {
       this.hp = 0;
@@ -137,6 +176,19 @@ export class GameShip {
       if (this.sinkT > 5) this.dead = true;
       return;
     }
+
+    // ---- debuff 计时（着火持续掉血，可致命） ----
+    if (this.debuff.fire > 0) {
+      this.debuff.fire -= dt;
+      this.hp -= DEBUFF_DEFS.fire.dps * dt;
+      if (this.hp <= 0) {
+        this.hp = 0;
+        this.startSinking();
+        return;
+      }
+    }
+    if (this.debuff.leak > 0) this.debuff.leak -= dt;
+    if (this.debuff.sail > 0) this.debuff.sail -= dt;
 
     // ---- 浮力：采样船头/船尾/左舷/右舷四点波高（随船长缩放） ----
     const ls = this.lengthScale;

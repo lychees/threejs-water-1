@@ -1612,3 +1612,94 @@ body {
   color: var(--red);
   letter-spacing: 0.12em;
 }
+
+/* --------------------------------------------------------------------------
+   Ship select (阶段 B2 选船卡片，开始门内)
+   -------------------------------------------------------------------------- */
+
+.shipselect {
+  margin-top: 14px;
+}
+
+.shipselect__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+  max-height: 38vh;
+  overflow-y: auto;
+  border: 1px solid var(--rule);
+  padding: 6px;
+}
+
+.shipselect__card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  background: var(--ink-raised);
+  border: 1px solid var(--rule-soft);
+  border-top: 3px double transparent;
+  color: var(--bone);
+  font-family: var(--font-instrument);
+  text-align: left;
+  cursor: pointer;
+}
+
+.shipselect__card:hover {
+  border-color: var(--rule);
+}
+
+.shipselect__card.is-selected {
+  border-top: 3px double var(--red);
+  background: var(--ink-deep);
+}
+
+.shipselect__name {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.shipselect__en {
+  font-size: 10px;
+  color: var(--bone-dim);
+  margin-bottom: 4px;
+}
+
+.shipselect__stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9px;
+  color: var(--bone-dim);
+}
+
+.shipselect__stat-label {
+  width: 10px;
+  flex: none;
+}
+
+.shipselect__stat-track {
+  flex: 1;
+  height: 4px;
+  background: var(--ink-deep);
+  border: 1px solid var(--rule-soft);
+}
+
+.shipselect__stat-fill {
+  display: block;
+  height: 100%;
+  background: var(--bone-dim);
+}
+
+.shipselect__card.is-selected .shipselect__stat-fill {
+  background: var(--red);
+}
+
+/* 玩家 debuff 图标行 */
+.ghud__debuffs {
+  display: flex;
+  gap: 10px;
+  min-height: 16px;
+  margin-top: 6px;
+  font-size: 11px;
+}

@@ -62,6 +62,8 @@ import { TouchControls } from './ui/TouchControls';
 import { DEFAULT_UI_STATE, type UiState } from './ui/types';
 import { openStartGate, type StartSelection } from './ui/StartGate';
 import { Game } from './game/Game';
+import { loadShipStats } from './game/Shipyard';
+import { assetUrl } from './core/paths';
 import { inject } from '@vercel/analytics';
 
 // Vercel Web Analytics, and only where Vercel is actually serving it.
@@ -1237,6 +1239,9 @@ class App {
 
       // 海战玩法接管主船（内部会停用 shipControls）。Game 持有 scene/assets/
       // sampler 的波高采样，敌船模型经 AssetLoader 缓存克隆。
+      // B2：25 船属性表随内容加载一并取回，失败时全表回落基准属性。
+      const shipStats = await loadShipStats(assetUrl('/data/ships.json'));
+      if (this.disposed) return;
       this.game = new Game({
         scene: this.scene,
         uiRoot: this.uiRoot,
@@ -1244,6 +1249,8 @@ class App {
         player: ship,
         assets: this.assets,
         controls: this.shipControls,
+        audio: this.audio,
+        shipStats,
         heightAt: (x, z) => this.sampler.height(x, z),
       });
 

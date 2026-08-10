@@ -1,26 +1,41 @@
 /**
- * 游戏编排：输入（帆位/蓄力/发射）、冷却、扇面预览、命中结算、船体碰撞、
- * 击沉计数与波次、Game Over 与 R 重开。移植自旧 js/main.js 的玩法段。
+ * 游戏编排：输入（帆位/蓄力/发射）、冷却、扇面预览、命中结算（含 debuff）、
+ * 船体碰撞、击沉计数与波次、补给拾取、Game Over 与 R 重开。
+ * 移植自旧 js/main.js 的玩法段。
  *
  * 与基座的关系：玩家的运动由这里的街机模型驱动（见 GameShip 头注释），
  * 基座的 BuoyantBody/ShipController 对主船保持停用；波高来自 OceanSampler，
- * 外观是 scene/Ship.load 的归一化 glTF，相机由基座 CameraDirector 的
- * boat 模式继续追踪 ship.object —— 它只读 transform，不关心谁在写。
+ * 相机由基座 CameraDirector 的 boat 模式继续追踪 ship.object —— 它只读
+ * transform，不关心谁在写。战斗音效挂基座 AudioSystem 的合成总线。
+ *
+ * 阶段 B2：玩家船型来自 Shipyard 的 25 船表（开始门选择，localStorage 持久化），
+ * 属性由 ships.json 经 computeStats 映射；有真实模型的 4 艘本阶段用基座
+ * glTF 船模按船长缩放代替，其余用程序化生成（挂在基座 object 下做子节点，
+ * glTF 模型隐藏——App 的尾迹/浪花/相机锚点不变）。
  */
 
 import * as THREE from 'three/webgpu';
 import type { Ship } from '../scene/Ship';
 import type { AssetLoader } from '../scene/AssetLoader';
 import type { ShipController } from '../physics/ShipController';
-import { GameShip, type WaveHeightAt } from './GameShip';
-import { Combat, type HitTarget } from './Combat';
+import type { AudioSystem } from '../audio';
+import { GameShip, DEBUFF_DEFS, type WaveHeightAt } from './GameShip';
+import { Combat, type HitTarget, type Cannonball } from './Combat';
 import { EnemyFleet } from './EnemyFleet';
 import { GameHud, ENEMY_HP_BAR_TIME, dmgFontSize } from './GameHud';
 import { makeFanViz, updateFanViz } from './FanViz';
-import { FEEL, PLAYER_STATS } from './PlayerConfig';
+import { Supplies } from './Supplies';
+import {
+  buildShip,
+  getShipDef,
+  resolveShipId,
+  BASE_LENGTH,
+  type ShipStats,
+} from './Shipyard';
+import { FEEL } from './PlayerConfig';
 
-/** 基座船模归一化到 27m，旧版基准船长 9m。 */
-const LENGTH_SCALE = 27 / 9;
+/** 基座 glTF 船模归一化后的船长（米），缩放真实模型船型时以此为基准。 */
+const BASE_MODEL_LENGTH = 27;
 
 // ---- 船只碰撞（椭圆碰撞体 + 撞击伤害），旧 js/main.js 同名单元 ----
 const COLLISION_MIN_SPEED = 3; // 相对速度低于此值不计伤害
@@ -37,14 +52,21 @@ export interface GameOptions {
   assets: AssetLoader;
   /** 基座的玩家船控制器；游戏接管期间保持停用。 */
   controls: ShipController;
+  /** 基座音频系统（战斗音效走它的合成总线，音量滑杆即生效）。 */
+  audio: AudioSystem;
+  /** 25 船属性表（ships.json 映射完成；加载失败时各项为 FALLBACK_STATS）。 */
+  shipStats: Record<number, ShipStats>;
   heightAt: WaveHeightAt;
 }
 
 export class Game {
   private readonly player: GameShip;
+  private readonly playerBase: Ship;
   private readonly combat: Combat;
   private readonly fleet: EnemyFleet;
   private readonly hud: GameHud;
+  private readonly audio: AudioSystem;
+  private supplies: Supplies | null = null;
   private readonly camera: THREE.PerspectiveCamera;
   private readonly heightAt: WaveHeightAt;
   private readonly abort = new AbortController();
@@ -53,8 +75,12 @@ export class Game {
   private readonly fanR: THREE.Mesh;
   private readonly fanBow: THREE.Mesh;
 
+  /** 玩家程序化外观（选真实模型船型时为 null，帆面鼓动由基座 Ship 负责）。 */
+  private playerVisual: { group: THREE.Group; setSailAmount(amount: number): void } | null = null;
+
   private state: 'playing' | 'over' = 'playing';
   private kills = 0;
+  private loot = 0; // 战利品（宝箱）计数
   private sailAmount = 0; // 帆量连续值：-ASTERN_MAX(倒车) ~ 1(满帆)
   private asternHoldT = 0; // S 按住且帆量为 0 的持续时间（超 ASTERN_HOLD 进入倒车）
   private cooldownL = 0;
@@ -74,27 +100,53 @@ export class Game {
   constructor(options: GameOptions) {
     this.camera = options.camera;
     this.heightAt = options.heightAt;
+    this.audio = options.audio;
+    this.playerBase = options.player;
 
     // 游戏接管主船：基座的力模型控制器保持停用，浮力由 GameShip 自己采样。
     options.controls.setEnabled(false);
     options.controls.setKeyboardEnabled(false);
 
+    // ---- 所选船型：属性（ships.json 映射） + 外观 ----
+    const def = getShipDef(resolveShipId());
+    const stats = options.shipStats[def.id];
+    const lengthScale = def.spec.length / BASE_LENGTH;
     this.player = new GameShip(options.player.object, {
-      maxHp: PLAYER_STATS.maxHp,
-      maxSpeed: PLAYER_STATS.maxSpeed,
-      turnRate: PLAYER_STATS.turnRate,
-      cannons: PLAYER_STATS.cannons,
-      lengthScale: LENGTH_SCALE,
+      maxHp: stats.hp,
+      maxSpeed: stats.maxSpeed,
+      turnRate: stats.turnRate,
+      cannons: stats.cannons,
+      lengthScale,
     });
+    if (def.model) {
+      // 有真实模型的船型：B2 先用基座 glTF 按船长缩放（精致模型 B3 进 public 管线）
+      this.playerBase.setModelVisible(true);
+      this.playerBase.setModelScale(def.spec.length / BASE_MODEL_LENGTH);
+      this.player.baseY = 0; // glTF 模型设计水线即在 y=0
+    } else {
+      // 程序化船型：+Z 船头，转到容器的 +X 约定下；基座 glTF 隐藏
+      this.playerBase.setModelVisible(false);
+      const visual = buildShip(def.spec);
+      visual.group.rotation.y = Math.PI / 2;
+      this.playerBase.object.add(visual.group);
+      this.playerVisual = visual;
+      this.player.baseY = 0.55 * lengthScale;
+    }
     this.player.revive();
 
     this.combat = new Combat(options.scene, this.heightAt);
-    this.fleet = new EnemyFleet(options.scene, options.assets, this.combat);
+    this.combat.onSplash = () => this.audio.playSplash(0.7);
+    this.fleet = new EnemyFleet(options.scene, this.combat);
     this.hud = new GameHud(options.uiRoot);
 
     this.fanL = makeFanViz(options.scene);
     this.fanR = makeFanViz(options.scene);
     this.fanBow = makeFanViz(options.scene);
+
+    // 漂浮补给：模型异步到，到了才开始撒布
+    void Supplies.load(options.scene, options.assets, this.heightAt, this.player).then((s) => {
+      this.supplies = s;
+    });
 
     const { signal } = this.abort;
     window.addEventListener('keydown', this.onKeyDown, { signal });
@@ -106,7 +158,7 @@ export class Game {
 
     this.begin();
 
-    // 调试/自动化钩子（截图验证与后续 B2 测试用）。
+    // 调试/自动化钩子（截图验证与后续测试用）。
     (window as unknown as { __game: Game }).__game = this;
   }
 
@@ -127,6 +179,7 @@ export class Game {
     this.fleet.reset();
     this.player.revive();
     this.kills = 0;
+    this.loot = 0;
     this.cooldownL = this.cooldownR = this.cooldownBow = 0;
     this.chargeL = this.chargeR = this.chargeBow = null;
     this.collisionCooldowns.clear();
@@ -140,6 +193,12 @@ export class Game {
   update(dt: number): void {
     this.time += dt;
     const player = this.player;
+
+    // 任意死因（炮火/撞击/着火）都进 Game Over
+    if (this.state === 'playing' && player.sinking) {
+      this.state = 'over';
+      this.gameOverT = 0;
+    }
 
     // ---- 玩家操控（旧版手感：帆量连续、舵效随速） ----
     if (this.state === 'playing' && !player.sinking) {
@@ -160,7 +219,7 @@ export class Game {
         this.asternHoldT = 0;
       }
 
-      const targetSpeed = this.sailAmount * player.maxSpeed;
+      const targetSpeed = this.sailAmount * player.maxSpeed * player.speedMul; // debuff 乘区
       player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
       let turn = 0;
       if (this.keys.has('KeyA')) turn += 1; // A = 左转
@@ -198,6 +257,19 @@ export class Game {
     });
     this.resolveShipCollisions();
 
+    // ---- 补给 ----
+    this.supplies?.update(dt, this.time, (event) => {
+      this.combat.splash(event.position);
+      this.audio.playPickup();
+      if (event.kind === 'repair') {
+        player.hp = Math.min(player.maxHp, player.hp + (this.supplies?.repairAmount ?? 10));
+        this.hud.floatText('+10 修复');
+      } else {
+        this.loot += 1;
+        this.hud.floatText('+1 战利品');
+      }
+    });
+
     // ---- 命中判定 ----
     const targets: HitTarget[] = [{ ship: player, isPlayer: true }];
     for (const e of this.fleet.enemies) targets.push({ ship: e, isPlayer: false });
@@ -212,6 +284,25 @@ export class Game {
         pos.z += (Math.random() - 0.5) * 4;
         pos.y = this.heightAt(pos.x, pos.z);
         this.combat.bubbles(pos);
+      }
+    }
+
+    // ---- debuff 粒子：着火冒火焰、漏水舷侧冒水花 ----
+    for (const s of [player, ...this.fleet.enemies]) {
+      if (s.sinking || s.dead) continue;
+      if (s.debuff.fire > 0 && Math.random() < dt * 10) {
+        const pos = s.position.clone();
+        pos.x += (Math.random() - 0.5) * 2;
+        pos.z += (Math.random() - 0.5) * 2;
+        pos.y += 1.5;
+        this.combat.firePuff(pos);
+      }
+      if (s.debuff.leak > 0 && Math.random() < dt * 1.5) {
+        const pos = s.position.clone();
+        pos.x += (Math.random() - 0.5) * 3;
+        pos.z += (Math.random() - 0.5) * 3;
+        pos.y = this.heightAt(pos.x, pos.z) + 0.1;
+        this.combat.splash(pos);
       }
     }
 
@@ -232,6 +323,7 @@ export class Game {
       { broadside: FEEL.RELOAD_TIME, bow: FEEL.BOW_RELOAD },
       this.kills,
       this.fleet.wave,
+      this.loot,
     );
     this.hud.updateEnemyHpBars(dt, this.fleet.enemies, this.camera);
   }
@@ -289,9 +381,11 @@ export class Game {
 
   // ------------------------------------------------------------------ 火炮
 
-  /** 帆位连续设置（倒车为负值）。 */
+  /** 帆位连续设置（倒车为负值；破帆时上限被压低）。 */
   private setSail(v: number): void {
-    this.sailAmount = THREE.MathUtils.clamp(v, -FEEL.ASTERN_MAX, 1);
+    this.sailAmount = THREE.MathUtils.clamp(v, -FEEL.ASTERN_MAX, this.player.sailCap);
+    // 倒车时帆面按收帆显示
+    this.playerVisual?.setSailAmount(Math.max(0, this.sailAmount));
   }
 
   /** 按住蓄力、松开发射；冷却未结束时按住不开始蓄力。 */
@@ -326,6 +420,7 @@ export class Game {
       fromPlayer: true, // 炮数取 ship.cannons
       damageMul: 0.7 + 0.8 * p, // 伤害随蓄力
     });
+    this.audio.playCannon();
     if (side < 0) this.cooldownL = FEEL.RELOAD_TIME;
     else this.cooldownR = FEEL.RELOAD_TIME;
   }
@@ -338,17 +433,16 @@ export class Game {
       speed: FEEL.BOW_SPEED * (0.6 + 0.9 * p),
       damageMul: (0.7 + 0.8 * p) * (this.player.cannons <= 2 ? 1.5 : 1),
     });
+    this.audio.playCannon();
     this.cooldownBow = FEEL.BOW_RELOAD;
   }
 
   // ------------------------------------------------------------------ 命中与碰撞
 
-  private readonly onHit = (
-    ball: { damageMul?: number; fromPlayer: boolean },
-    target: HitTarget,
-  ): void => {
+  private readonly onHit = (ball: Cannonball, target: HitTarget): void => {
     const base = target.isPlayer ? 12 : 20;
     const dmg = base * (ball.damageMul ?? 1);
+    this.audio.playHit();
     const sunk = target.ship.takeDamage(dmg);
     if (!target.isPlayer && ball.fromPlayer) {
       // 玩家造成的伤害：白字漂浮 + 敌船血条
@@ -358,10 +452,16 @@ export class Game {
         size: dmgFontSize(dmg),
       });
     }
-    if (sunk && target.isPlayer) {
-      this.state = 'over';
-      this.gameOverT = 0;
+    if (!sunk) {
+      // TODO(B3 天气)：大雨中（weather.fireOut）不附加着火
+      for (const key of target.ship.rollDebuffs(false)) {
+        // 敌船中 debuff：头上飘字；玩家中 debuff：HUD 图标表达（hud.update）
+        if (!target.isPlayer) {
+          this.hud.floatTextAt(`敌船${DEBUFF_DEFS[key].label}！`, target.ship.position, this.camera);
+        }
+      }
     }
+    // 玩家被打沉由 update 里的 player.sinking 检查统一接管（含着火致死）
   };
 
   /** 椭圆碰撞体 + 撞击伤害，旧 js/main.js resolveShipCollisions 直译。 */
@@ -443,8 +543,9 @@ export class Game {
               (a.position.z + b.position.z) / 2,
             );
             this.combat.explosion(mid); // 木屑+硝烟
-            const sunkA = a.takeDamage(dmgA);
-            const sunkB = b.takeDamage(dmgB);
+            this.audio.playHit();
+            a.takeDamage(dmgA);
+            b.takeDamage(dmgB);
             // 玩家造成的撞击伤害：敌船飘白字 + 亮血条
             for (const [s, d] of [
               [a, dmgA],
@@ -458,10 +559,7 @@ export class Game {
                 });
               }
             }
-            if ((sunkA && a === this.player) || (sunkB && b === this.player)) {
-              this.state = 'over';
-              this.gameOverT = 0;
-            }
+            // 玩家撞沉同样由 update 的 player.sinking 检查接管
           }
         }
       }

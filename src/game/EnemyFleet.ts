@@ -1,42 +1,36 @@
 /**
  * 敌方 AI 船队：远处生成、接近、环绕、舷侧齐射；被击沉后延迟补充，难度随波次提升。
- * 移植自旧 js/enemy.js。外观用基座的船模（scene/Ship.load 的独立克隆），
- * 材质克隆后乘暗红色区分敌我——loader 的材质是共享缓存，直接改会连玩家船一起染色。
+ * 移植自旧 js/enemy.js。
+ *
+ * 阶段 B2：外观从基座 glTF 克隆换成 Shipyard 程序化生成——从中大型船 spec 池
+ * 随机取材，深色船体 + 暗红帆区分敌我；同步生成，没有异步加载窗口。
  */
 
 import * as THREE from 'three/webgpu';
-import { Ship } from '../scene/Ship';
-import type { AssetLoader } from '../scene/AssetLoader';
-import type { GameShip as GameShipType, WaveHeightAt } from './GameShip';
-import { GameShip } from './GameShip';
+import { GameShip, type WaveHeightAt } from './GameShip';
+import { buildShip, getShipDef, BASE_LENGTH } from './Shipyard';
 import type { Combat } from './Combat';
 
-/** 基座船模归一化到 27m，旧版基准船长 9m。 */
-const LENGTH_SCALE = 27 / 9;
+const ENEMY_HULL = 0x3a3f4a; // 深灰船体
+const ENEMY_SAIL = 0x9e3030; // 暗红帆，辨识度
 
-/** 敌船染色：帆乘暗红（辨识度），其余略微压暗。 */
-const SAIL_TINT = new THREE.Color(1.0, 0.42, 0.42);
-const HULL_TINT = new THREE.Color(0.72, 0.68, 0.72);
+/** 敌船可用的中大型船池（SHIP_DEFS id）。 */
+const ENEMY_POOL = [9, 10, 11, 15, 20];
 
 export interface FleetHooks {
-  onEnemySunk(ship: GameShipType): void;
+  onEnemySunk(ship: GameShip): void;
   onWaveUp(wave: number): void;
 }
 
-function tintEnemy(root: THREE.Object3D): void {
-  root.traverse((node) => {
-    const mesh = node as THREE.Mesh;
-    if (!mesh.isMesh) return;
-    const name = `${mesh.name} ${mesh.parent?.name ?? ''}`.toLowerCase();
-    const tint = name.includes('sail') ? SAIL_TINT : HULL_TINT;
-    const tintOne = (m: THREE.Material): THREE.Material => {
-      const cloned = m.clone();
-      const colored = cloned as THREE.Material & { color?: THREE.Color };
-      if (colored.color) colored.color.multiply(tint);
-      return cloned;
-    };
-    mesh.material = Array.isArray(mesh.material) ? mesh.material.map(tintOne) : tintOne(mesh.material);
-  });
+/** 程序化船是 +Z 船头，转到 GameShip 容器（+X 船头约定）下要 yaw +π/2。 */
+function wrapEnemyVisual(spec: (typeof ENEMY_POOL)[number]): THREE.Group {
+  const def = getShipDef(spec);
+  const visual = buildShip(def.spec, { hullColor: ENEMY_HULL, sailColor: ENEMY_SAIL });
+  visual.setSailAmount(0.9); // 敌船恒近满帆
+  const container = new THREE.Group();
+  visual.group.rotation.y = Math.PI / 2;
+  container.add(visual.group);
+  return container;
 }
 
 export class EnemyFleet {
@@ -45,13 +39,11 @@ export class EnemyFleet {
   killsThisWave = 0;
 
   private readonly scene: THREE.Scene;
-  private readonly assets: AssetLoader;
   private readonly combat: Combat;
   private readonly respawnTimers: number[] = [];
 
-  constructor(scene: THREE.Scene, assets: AssetLoader, combat: Combat) {
+  constructor(scene: THREE.Scene, combat: Combat) {
     this.scene = scene;
-    this.assets = assets;
     this.combat = combat;
   }
 
@@ -59,45 +51,35 @@ export class EnemyFleet {
     return Math.min(2 + (this.wave - 1), 6);
   }
 
-  /** 异步生成：模型经 loader 缓存，首次之后基本即时。 */
   spawnOne(playerPos: THREE.Vector3): void {
     const angle = Math.random() * Math.PI * 2;
     const dist = 150 + Math.random() * 90;
-    const wave = this.wave;
-    void Ship.load(this.assets)
-      .then((visual) => {
-        tintEnemy(visual.object);
-        const ship = new GameShip(visual.object, {
-          maxHp: 50 + wave * 15,
-          maxSpeed: 6.5 + wave * 0.4,
-          turnRate: 0.55,
-          cannons: 3,
-          lengthScale: LENGTH_SCALE,
-        });
-        ship.position.set(
-          playerPos.x + Math.cos(angle) * dist,
-          0,
-          playerPos.z + Math.sin(angle) * dist,
-        );
-        ship.heading = angle + Math.PI; // 大致朝玩家
-        this.scene.add(visual.object);
-        // AI 附加状态挂在实体上
-        ship.orbitDir = Math.random() < 0.5 ? 1 : -1;
-        ship.cooldown = 2 + Math.random() * 3;
-        ship.visual = visual;
-        this.enemies.push(ship);
-      })
-      .catch((error: unknown) => {
-        console.error('[game] enemy ship failed to load', error);
-      });
+    const defId = ENEMY_POOL[Math.floor(Math.random() * ENEMY_POOL.length)];
+    const def = getShipDef(defId);
+    const lengthScale = def.spec.length / BASE_LENGTH;
+
+    const ship = new GameShip(wrapEnemyVisual(defId), {
+      maxHp: 50 + this.wave * 15,
+      maxSpeed: 6.5 + this.wave * 0.4,
+      turnRate: 0.55,
+      cannons: 3,
+      lengthScale,
+    });
+    // 程序化船体的吃水：比旧版略抬，防大浪穿模透过甲板
+    ship.baseY = 0.55 * lengthScale;
+    ship.position.set(
+      playerPos.x + Math.cos(angle) * dist,
+      0,
+      playerPos.z + Math.sin(angle) * dist,
+    );
+    ship.heading = angle + Math.PI; // 大致朝玩家
+    ship.orbitDir = Math.random() < 0.5 ? 1 : -1;
+    ship.cooldown = 2 + Math.random() * 3;
+    this.scene.add(ship.object);
+    this.enemies.push(ship);
   }
 
-  update(
-    dt: number,
-    player: GameShip,
-    heightAt: WaveHeightAt,
-    hooks: FleetHooks,
-  ): void {
+  update(dt: number, player: GameShip, heightAt: WaveHeightAt, hooks: FleetHooks): void {
     // ---- 补充新船 ----
     for (let i = this.respawnTimers.length - 1; i >= 0; i--) {
       this.respawnTimers[i] -= dt;
@@ -116,7 +98,6 @@ export class EnemyFleet {
     for (let i = this.enemies.length - 1; i >= 0; i--) {
       const e = this.enemies[i];
       e.update(dt, heightAt);
-      e.visual?.update(dt); // 帆面鼓动
 
       // 沉船动画播完：移除 + 计数 + 升波
       if (e.dead) {
@@ -146,16 +127,16 @@ export class EnemyFleet {
       if (dist > 55) {
         desired = angleToP;
       } else if (dist < 26) {
-        desired = angleToP + (e.orbitDir ?? 1) * Math.PI * 0.75;
+        desired = angleToP + e.orbitDir * Math.PI * 0.75;
       } else {
-        desired = angleToP + (e.orbitDir ?? 1) * Math.PI * 0.5;
+        desired = angleToP + e.orbitDir * Math.PI * 0.5;
       }
       e.turnToward(desired, dt);
-      const targetSpeed = dist > 20 ? e.maxSpeed : e.maxSpeed * 0.55;
+      const targetSpeed = (dist > 20 ? e.maxSpeed : e.maxSpeed * 0.55) * e.speedMul;
       e.speed += (targetSpeed - e.speed) * Math.min(1, dt * 1.5);
 
       // 开火：舷侧大致对准玩家且进入射程
-      e.cooldown = (e.cooldown ?? 0) - dt;
+      e.cooldown -= dt;
       if (e.cooldown <= 0 && dist < 52) {
         const starboard = new THREE.Vector3(-Math.cos(e.heading), 0, Math.sin(e.heading)); // 与 Combat 舷侧约定一致
         const dot = starboard.dot(toP.clone().normalize());
