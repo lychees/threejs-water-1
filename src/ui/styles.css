@@ -1456,6 +1456,15 @@ body {
   z-index: 30;
 }
 
+/* `#ui-root > *` opts every direct child back into hit-testing at (1,0,1),
+   which beats the plain `.ghud-root` rule above and would leave this
+   full-viewport layer swallowing every click on the settings panel — the same
+   failure the base already documented for `.quote`. Restate at (1,1,1) so it
+   wins; the minimap re-enables `auto` on itself. */
+#ui-root > .ghud-root {
+  pointer-events: none;
+}
+
 .ghud {
   position: absolute;
   background: var(--ink);
