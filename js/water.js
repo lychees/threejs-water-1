@@ -1,7 +1,11 @@
-// 水面：Gerstner 大波位移 + 细节法线 + 次表面散射 + Jacobian 白沫 + 天空反射
+// 水面（TSL / WebGPURenderer）：Gerstner 大波位移 + 法线贴图细节 + SSS + Jacobian 白沫 + 天空反射
 import * as THREE from 'three';
-import { SKY_GLSL, SKY_COLORS } from './sky.js';
-
+import {
+  Fn, uniform, texture, varying, positionLocal, cameraPosition,
+  vec2, vec3, float, dot, normalize, mix, clamp, smoothstep, pow, max, min, abs,
+  length, sin, cos, step, reflect,
+} from 'three/tsl';
+import { SKY_COLORS, SKY_UNIFORMS, makeSkyColor } from './sky.js';
 // 波形参数表：CPU（浮力）与 GPU（顶点着色器）共用同一份，保证一致
 // dir 会自动归一化；amp 振幅；len 波长；q 波峰尖锐度(0~1)
 const RAW_WAVES = [
@@ -121,246 +125,177 @@ export function getWaveHeight(x, z, t) {
   return y * cpuWaveScale;
 }
 
-const vertexShader = /* glsl */ `
-  uniform float uTime;
-  uniform float uWaveScale;            // 天气驱动的振幅全局缩放（与 CPU 浮力一致）
-  uniform vec4 uWaves[${WAVE_COUNT}];  // dirX, dirZ, amp, k
-  uniform vec4 uWave2[${WAVE_COUNT}];  // omega, q, -, -
 
-  varying vec3 vWorldPos;
-  varying vec3 vNormal;
-  varying float vHeight;               // 归一化波高 0~1
-  varying float vFoam;                 // 由雅可比行列式推得的破浪强度
-
-  #include <fog_pars_vertex>
-
-  void main() {
-    vec2 xz = position.xz;             // 以静止位置计算相位（标准 Gerstner 做法）
-    vec3 disp = vec3(0.0);
-    vec3 n = vec3(0.0, 1.0, 0.0);
-    float ampSum = 0.0;
-    // 水平位移梯度（雅可比矩阵元），用于检测波峰卷破
-    float dxx = 0.0;
-    float dzz = 0.0;
-    float dxz = 0.0;
-
-    for (int i = 0; i < ${WAVE_COUNT}; i++) {
-      vec2 d = uWaves[i].xy;
-      float amp = uWaves[i].z * uWaveScale;
-      float k = uWaves[i].w;
-      float omega = uWave2[i].x;
-      float q = uWave2[i].y;
-
-      float f = k * dot(d, xz) - omega * uTime;
-      float s = sin(f);
-      float c = cos(f);
-
-      disp.x += q * amp * d.x * c;     // 水平位移让波峰变尖
-      disp.z += q * amp * d.y * c;
-      disp.y += amp * s;
-
-      // 法线用 y 对 x/z 的偏导近似（与 CPU 采样一致）
-      n.x -= d.x * k * amp * c;
-      n.z -= d.y * k * amp * c;
-      ampSum += amp;
-
-      // 水平位移对静止坐标的偏导
-      float qs = q * amp * k * s;
-      dxx -= d.x * d.x * qs;
-      dzz -= d.y * d.y * qs;
-      dxz -= d.x * d.y * qs;
-    }
-
-    vec3 p = position + disp;
-    vHeight = disp.y / ampSum * 0.5 + 0.5;
-    vNormal = normalize(n);
-
-    // 雅可比行列式：J 越小说明水面折叠越厉害（波峰卷破），波幅温和故放大系数
-    float J = (1.0 + dxx) * (1.0 + dzz) - dxz * dxz;
-    vFoam = clamp((1.0 - J) * 5.0, 0.0, 1.0);
-
-    vec4 wp = modelMatrix * vec4(p, 1.0);
-    vWorldPos = wp.xyz;
-    vec4 mvPosition = viewMatrix * wp;
-    gl_Position = projectionMatrix * mvPosition;
-    #include <fog_vertex>
-  }
-`;
-
-const fragmentShader = /* glsl */ `
-  uniform float uTime;
-  uniform vec3 uDeepColor;
-  uniform vec3 uShallowColor;
-  uniform vec3 uSSSColor;
-  uniform vec3 uFoamColor;
-  uniform vec4 uIslands[10]; // x, z, 碎浪带半径, 呼吸相位（半径为 0 表示空槽位）
-  uniform float uFoamBoost;    // 天气驱动：风暴时白沫阈值降低
-  uniform float uCloudAmount;  // 云影强度（晴天淡、风暴浓）
-  uniform float uDetailWaves;  // 细节小波数量上限（画质档位）
-  uniform float uDaylight;     // 昼夜因子（0 夜 ~ 1 昼，daytime.js 写入）
-  uniform float uLightElev;    // 主导光源仰角（daytime.js 写入，驱动光路形态）
-  uniform sampler2D uNormalMap; // 程序化水面法线贴图（细节法线 + 泡沫打散）
-
-  ${SKY_GLSL}
-
-  varying vec3 vWorldPos;
-  varying vec3 vNormal;
-  varying float vHeight;
-  varying float vFoam;
-
-  #include <fog_pars_fragment>
-
-  // 廉价二维值噪声（泡沫打散、太阳闪点）
-  float hash21(vec2 p) {
-    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-  }
-  float vnoise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash21(i);
-    float b = hash21(i + vec2(1.0, 0.0));
-    float c = hash21(i + vec2(0.0, 1.0));
-    float d = hash21(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-  }
-
-  void main() {
-    vec3 toCam = cameraPosition - vWorldPos;
-    float camDist = length(toCam);
-    vec3 v = toCam / camDist;
-
-    // ---- 细节法线：程序化法线贴图三层滚动采样（随距离衰减防摩尔纹；层数=画质档） ----
-    vec3 n = normalize(vNormal);
-    float detailFade = 1.0 - smoothstep(40.0, 170.0, camDist);
-    if (detailFade > 0.001 && uDetailWaves > 0.5) {
-      vec3 nm = texture2D(uNormalMap, (vWorldPos.xz + vec2(uTime * 0.55, uTime * 0.22)) / 4.0).rgb * 2.0 - 1.0;
-      if (uDetailWaves > 1.5) {
-        nm += texture2D(uNormalMap, (vWorldPos.xz * vec2(1.0, 0.92) + vec2(-uTime * 0.30, uTime * 0.26)) / 13.0).rgb * 2.0 - 1.0;
-      }
-      if (uDetailWaves > 2.5) {
-        nm += texture2D(uNormalMap, (vWorldPos.xz + vec2(uTime * 0.16, -uTime * 0.12)) / 47.0).rgb * 2.0 - 1.0;
-      }
-      n = normalize(n + vec3(nm.x, 0.0, nm.y) * 0.22 * detailFade);
-    }
-
-    // ---- 基础色：深蓝 -> 青绿随波高渐变（夜晚随 uDaylight 压暗） ----
-    vec3 col = mix(uDeepColor, uShallowColor, vHeight) * (0.25 + 0.75 * uDaylight);
-
-    // ---- 天空反射：反射向量查与天空穹顶同一个 skyColor()，水天无缝 ----
-    vec3 r = reflect(-v, n);
-    r.y = abs(r.y);                            // 不允许反射到海平面以下
-    vec3 refl = skyColor(r);
-    // 向阳侧混入地平线暖色：黄昏时"金色海面"更明显
-    float sunSide = pow(max(dot(normalize(r.xz + vec2(1e-4, 0.0)), normalize(uSunDir.xz + vec2(1e-4, 0.0))), 0.0), 3.0);
-    refl = mix(refl, uHorizon * 1.1, sunSide * 0.25);
-    float fres = 0.04 + 0.96 * pow(1.0 - max(dot(n, v), 0.0), 5.0); // Schlick
-    col = mix(col, refl, clamp(fres * 1.1, 0.0, 1.0));
-
-    // ---- 云影：大尺度慢速漂移噪声暗化（与天气联动） ----
-    float cloudN = vnoise(vWorldPos.xz * 0.006 + vec2(uTime * 0.008, uTime * 0.005));
-    col *= mix(1.0, 0.8 + 0.2 * cloudN, uCloudAmount);
-
-    // ---- 次表面散射：视线朝向太阳时，浪峰透出青绿辉光 ----
-    float crest = smoothstep(0.45, 0.95, vHeight);
-    float sss = pow(max(dot(v, uSunDir), 0.0), 3.0) * crest;
-    col += uSSSColor * sss * 0.55 * uDaylight; // 夜晚透光减弱
-
-    // ---- 日月光路：各向异性高光（宽高光带 + 噪声调制的窄闪点 glitter） ----
-    // 法线扰动在"光源方位"方向保持、垂直方向放大粗糙度（Cox-Munk 近似），
-    // 高光沿光源方位拉成朝观察者延伸的带状光路；低仰角时拉伸比 3→6、颜色更深更暖
-    vec3 h = normalize(uSunDir + v);
-    vec2 sunAz = normalize(uSunDir.xz + vec2(1e-4, 0.0));
-    vec2 perpAz = vec2(-sunAz.y, sunAz.x);
-    float lowElev = 1.0 - smoothstep(0.05, 0.4, uLightElev);
-    float nAlong = dot(n.xz, sunAz);
-    float nAcross = dot(n.xz, perpAz) * (3.0 + 3.0 * lowElev);
-    vec3 na = normalize(vec3(sunAz.x * nAlong + perpAz.x * nAcross, n.y, sunAz.y * nAlong + perpAz.y * nAcross));
-    float ndh = max(dot(na, h), 0.0);
-    float lightLv = 0.35 + 0.65 * uDaylight; // 夜晚月光光路略弱；min() 防正午曝白
-    vec3 specCol = uSunColor * mix(vec3(1.0), vec3(1.25, 0.95, 0.7), lowElev); // 低仰角更饱和偏暖
-    col += specCol * min(pow(ndh, 260.0) * 1.2, 1.4) * lightLv;
-    float g = vnoise(vWorldPos.xz * 22.0 + vec2(uTime * 1.8, -uTime * 1.3));
-    float glitter = pow(ndh, 520.0) * smoothstep(0.55, 0.95, g) * (1.0 + 0.5 * lowElev);
-    col += specCol * min(glitter * 3.0, 2.0) * (0.3 + 0.7 * detailFade) * (0.15 + 0.85 * uDaylight);
-
-    // ---- 破浪白沫：雅可比 + 波高阈值，法线贴图绿通道纹理化打散，波谷渐隐 ----
-    float foamN = texture2D(uNormalMap, vWorldPos.xz * 0.09 + vec2(uTime * 0.02, -uTime * 0.014)).g;
-    float foamBase = clamp(vFoam * 0.9 + smoothstep(0.62, 0.95, vHeight) * 0.5 + uFoamBoost, 0.0, 1.0);
-    float foam = smoothstep(0.48, 0.78, foamBase + (foamN - 0.5) * 0.45);
-    foam *= smoothstep(0.28, 0.5, vHeight);            // 波谷处泡沫渐隐
-
-    // ---- 岛屿浅水碎浪带：碰撞半径附近一圈泡沫，噪声打散 + 随时间呼吸 ----
-    float surf = 0.0;
-    for (int i = 0; i < 10; i++) {
-      float ir = uIslands[i].z;
-      if (ir < 0.1) continue;
-      float rr = ir + sin(uTime * 0.7 + uIslands[i].w) * 1.5; // 呼吸
-      float d = distance(vWorldPos.xz, uIslands[i].xy);
-      surf = max(surf, 1.0 - smoothstep(0.0, 7.0, abs(d - rr)));
-    }
-    float surfN = texture2D(uNormalMap, vWorldPos.xz * 0.05 + vec2(uTime * 0.012, -uTime * 0.008)).g;
-    surf *= 0.55 + 0.45 * surfN;
-    foam = max(foam, surf);
-
-    foam *= 1.0 - smoothstep(150.0, 320.0, camDist);   // 远处淡出防摩尔纹
-    col = mix(col, uFoamColor * (0.3 + 0.7 * uDaylight), clamp(foam, 0.0, 1.0) * 0.9);
-
-    gl_FragColor = vec4(col, 1.0);
-    #include <tonemapping_fragment>
-    #include <colorspace_fragment>
-    #include <fog_fragment>
-  }
-`;
+// ================= TSL 材质部分 =================
+// 波参数/岛屿全部烘焙为常量（运行期不变），动态 uniform 只剩天气/昼夜接口
 
 export function createWater(sunDir, islands = []) {
   const geo = new THREE.PlaneGeometry(1000, 1000, 256, 256);
   geo.rotateX(-Math.PI / 2); // 躺平到 xz 平面，position.y 全为 0
 
-  const uniforms = THREE.UniformsUtils.merge([
-    THREE.UniformsLib.fog,
-    {
-      uTime: { value: 0 },
-      uWaveScale: { value: 1 },
-      uFoamBoost: { value: 0 },
-      uCloudAmount: { value: 0.15 },
-      uDetailWaves: { value: 10 },
-      uDaylight: { value: 1 },
-      uLightElev: { value: 0.5 },
-      uDeepColor: { value: new THREE.Color(0x0b3b5e) },
-      uShallowColor: { value: new THREE.Color(0x1e9e9a) },
-      uSSSColor: { value: new THREE.Color(0x35d0b0) },
-      uFoamColor: { value: new THREE.Color(0xf2fbfc) },
-      // 与天空穹顶共用同一组参数（SKY_GLSL 里声明的 uniform）
-      uZenith: { value: SKY_COLORS.zenith.clone() },
-      uHorizon: { value: SKY_COLORS.horizon.clone() },
-      uSunDir: { value: sunDir.clone() },
-      uSunColor: { value: SKY_COLORS.sun.clone() },
-    },
-  ]);
-  // merge 之后再把波形数组填进去（数组不便走 merge）
-  uniforms.uWaves = { value: WAVES.map((w) => new THREE.Vector4(w.dx, w.dz, w.amp, w.k)) };
-  uniforms.uWave2 = { value: WAVES.map((w) => new THREE.Vector4(w.omega, w.q, 0, 0)) };
-  // 程序化法线贴图（一次性 CPU 生成，RepeatWrapping 平铺）
-  uniforms.uNormalMap = { value: generateWaterNormalMap(512) };
-  // 岛屿碎浪带：x, z, 半径, 呼吸相位；空槽位半径为 0
-  uniforms.uIslands = {
-    value: Array.from({ length: 10 }, (_, i) => islands[i]
-      ? new THREE.Vector4(islands[i].x, islands[i].z, islands[i].radius, i * 1.7)
-      : new THREE.Vector4(0, 0, 0, 0)),
+  // 动态 uniform（weather.js / daytime.js 通过 .value 写入，接口与 GLSL 时代一致）
+  const uniforms = {
+    uTime: uniform(0),
+    uWaveScale: uniform(1),
+    uFoamBoost: uniform(0),
+    uCloudAmount: uniform(0.15),
+    uDetailWaves: uniform(3),          // 法线贴图层数（画质档位 1~3）
+    uDaylight: uniform(1),
+    uLightElev: uniform(0.5),
+    uDeepColor: uniform(new THREE.Color(0x0b3b5e)),
+    uShallowColor: uniform(new THREE.Color(0x1e9e9a)),
+    uSSSColor: uniform(new THREE.Color(0x35d0b0)),
+    uFoamColor: uniform(new THREE.Color(0xf2fbfc)),
+    uSunDir: uniform(sunDir.clone()),          // 日月混合光源方向（daytime 写入）
+    uSunColor: uniform(SKY_COLORS.sun.clone()), // 日月混合光源颜色（daytime 写入）
+    uZenith: SKY_UNIFORMS.uZenith,             // 与天空穹顶共享
+    uHorizon: SKY_UNIFORMS.uHorizon,
   };
-
-  const mat = new THREE.ShaderMaterial({
-    vertexShader,
-    fragmentShader,
-    uniforms,
-    fog: true,
-  });
-
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.frustumCulled = false;
-
   waterUniforms = uniforms; // 供 setWaveScale 使用
+
+  const normalMap = generateWaterNormalMap(512);
+  const skyColor = makeSkyColor(uniforms); // 用水的光源 uniform，反射与高光同源
+
+  // 顶点 -> 片元插值
+  const vWorldPos = varying(vec3(0));
+  const vNormal = varying(vec3(0, 1, 0));
+  const vHeight = varying(float(0));
+  const vFoam = varying(float(0));
+
+  // ---- 顶点：8 个 Gerstner 波叠加（JS 展开为常量表达式） ----
+  const positionNode = Fn(() => {
+    const xz = positionLocal.xz.toVar(); // 以静止位置计算相位（标准 Gerstner 做法）
+    const disp = vec3(0).toVar();
+    const nrm = vec3(0, 1, 0).toVar();
+    const ampSum = float(0).toVar();
+    const dxx = float(0).toVar(); // 水平位移梯度（雅可比矩阵元）
+    const dzz = float(0).toVar();
+    const dxz = float(0).toVar();
+
+    for (const w of WAVES) {
+      const f = float(w.k).mul(dot(vec2(w.dx, w.dz), xz)).sub(uniforms.uTime.mul(w.omega));
+      const s = sin(f);
+      const c = cos(f);
+      const amp = float(w.amp).mul(uniforms.uWaveScale); // 天气缩放
+      disp.x.addAssign(amp.mul(w.q * w.dx).mul(c));      // 水平位移让波峰变尖
+      disp.z.addAssign(amp.mul(w.q * w.dz).mul(c));
+      disp.y.addAssign(amp.mul(s));
+      nrm.x.subAssign(amp.mul(w.k * w.dx).mul(c));       // 法线用 y 对 x/z 偏导（与 CPU 一致）
+      nrm.z.subAssign(amp.mul(w.k * w.dz).mul(c));
+      ampSum.addAssign(amp);
+      const qs = amp.mul(w.k * w.q).mul(s);
+      dxx.subAssign(qs.mul(w.dx * w.dx));
+      dzz.subAssign(qs.mul(w.dz * w.dz));
+      dxz.subAssign(qs.mul(w.dx * w.dz));
+    }
+
+    const p = positionLocal.add(disp);
+    vWorldPos.assign(p); // mesh 在原点，局部坐标即世界坐标
+    vNormal.assign(normalize(nrm));
+    vHeight.assign(disp.y.div(ampSum).mul(0.5).add(0.5));
+    const J = dxx.add(1).mul(dzz.add(1)).sub(dxz.mul(dxz)); // 雅可比行列式
+    vFoam.assign(clamp(J.oneMinus().mul(5), 0, 1));
+    return p;
+  })();
+
+  // ---- 片元 ----
+  const colorNode = Fn(() => {
+    const toCam = cameraPosition.sub(vWorldPos);
+    const camDist = length(toCam).toVar();
+    const v = toCam.div(camDist).toVar();
+
+    // 细节法线：法线贴图三层滚动采样（4m/13m/47m），随距离衰减防摩尔纹
+    const n = normalize(vNormal).toVar();
+    const detailFade = float(1).sub(smoothstep(40.0, 170.0, camDist)).toVar();
+    const nm1 = texture(normalMap, vWorldPos.xz.add(vec2(uniforms.uTime.mul(0.55), uniforms.uTime.mul(0.22))).div(4.0)).rgb.mul(2).sub(1);
+    const nm2 = texture(normalMap, vWorldPos.xz.mul(vec2(1.0, 0.92)).add(vec2(uniforms.uTime.mul(-0.30), uniforms.uTime.mul(0.26))).div(13.0)).rgb.mul(2).sub(1);
+    const nm3 = texture(normalMap, vWorldPos.xz.add(vec2(uniforms.uTime.mul(0.16), uniforms.uTime.mul(-0.12))).div(47.0)).rgb.mul(2).sub(1);
+    const nm = nm1
+      .add(nm2.mul(step(1.5, uniforms.uDetailWaves)))
+      .add(nm3.mul(step(2.5, uniforms.uDetailWaves)));
+    n.assign(normalize(n.add(vec3(nm.x, 0.0, nm.y).mul(detailFade.mul(0.22)))));
+
+    // 基础色：深蓝 -> 青绿随波高渐变（夜晚随 uDaylight 压暗）
+    const col = mix(uniforms.uDeepColor, uniforms.uShallowColor, vHeight)
+      .mul(float(0.25).add(uniforms.uDaylight.mul(0.75))).toVar();
+
+    // 天空反射：反射向量查与天空穹顶同一个 skyColor，水天无缝
+    const r = reflect(v.negate(), n).toVar();
+    r.y.assign(abs(r.y)); // 不允许反射到海平面以下
+    const refl = skyColor(r).toVar();
+    // 向阳侧混入地平线暖色：黄昏时"金色海面"更明显
+    const sunSide = pow(max(dot(normalize(r.xz.add(1e-4)), normalize(uniforms.uSunDir.xz.add(1e-4))), 0.0), 3.0);
+    refl.assign(mix(refl, uniforms.uHorizon.mul(1.1), sunSide.mul(0.25)));
+    const fres = float(0.04).add(float(0.96).mul(pow(float(1).sub(max(dot(n, v), 0.0)), 5.0))); // Schlick
+    col.assign(mix(col, refl, clamp(fres.mul(1.1), 0.0, 1.0)));
+
+    // 云影：法线贴图绿色通道做大尺度慢漂移暗化（与天气联动）
+    const cloudN = texture(normalMap, vWorldPos.xz.mul(0.006).add(vec2(uniforms.uTime.mul(0.008), uniforms.uTime.mul(0.005)))).g;
+    col.mulAssign(mix(1.0, cloudN.mul(0.2).add(0.8), uniforms.uCloudAmount));
+
+    // 次表面散射：视线朝向光源时，浪峰透出青绿辉光
+    const crest = smoothstep(0.45, 0.95, vHeight);
+    const sss = pow(max(dot(v, uniforms.uSunDir), 0.0), 3.0).mul(crest);
+    col.addAssign(uniforms.uSSSColor.mul(sss.mul(0.55).mul(uniforms.uDaylight)));
+
+    // 日月光路：各向异性高光（光源方位保持、垂直方向放大粗糙度，Cox-Munk 近似）
+    // 低仰角时拉伸比 3→6、颜色更深更暖
+    const h = normalize(uniforms.uSunDir.add(v));
+    const sunAz = normalize(uniforms.uSunDir.xz.add(vec2(1e-4, 0.0)));
+    const perpAz = vec2(sunAz.y.negate(), sunAz.x);
+    const lowElev = float(1).sub(smoothstep(0.05, 0.4, uniforms.uLightElev));
+    const nAlong = dot(n.xz, sunAz);
+    const nAcross = dot(n.xz, perpAz).mul(float(3.0).add(lowElev.mul(3.0)));
+    const na = normalize(vec3(
+      sunAz.x.mul(nAlong).add(perpAz.x.mul(nAcross)),
+      n.y,
+      sunAz.y.mul(nAlong).add(perpAz.y.mul(nAcross))
+    ));
+    const ndh = max(dot(na, h), 0.0);
+    const lightLv = float(0.35).add(uniforms.uDaylight.mul(0.65));
+    const specCol = uniforms.uSunColor.mul(mix(vec3(1, 1, 1), vec3(1.25, 0.95, 0.7), lowElev));
+    col.addAssign(specCol.mul(min(pow(ndh, 260.0).mul(1.2), 1.4)).mul(lightLv));
+    const g = texture(normalMap, vWorldPos.xz.mul(0.35).add(vec2(uniforms.uTime.mul(0.3), uniforms.uTime.mul(-0.22)))).g;
+    const glitter = pow(ndh, 520.0).mul(smoothstep(0.55, 0.95, g)).mul(float(1).add(lowElev.mul(0.5)));
+    col.addAssign(specCol.mul(min(glitter.mul(3.0), 2.0))
+      .mul(float(0.3).add(detailFade.mul(0.7)))
+      .mul(float(0.15).add(uniforms.uDaylight.mul(0.85))));
+
+    // 破浪白沫：雅可比 + 波高阈值，法线贴图绿通道纹理化打散，波谷渐隐
+    const foamN = texture(normalMap, vWorldPos.xz.mul(0.09).add(vec2(uniforms.uTime.mul(0.02), uniforms.uTime.mul(-0.014)))).g;
+    const foamBase = clamp(
+      vFoam.mul(0.9).add(smoothstep(0.62, 0.95, vHeight).mul(0.5)).add(uniforms.uFoamBoost), 0, 1
+    );
+    const foam = smoothstep(0.48, 0.78, foamBase.add(foamN.sub(0.5).mul(0.45))).toVar();
+    foam.mulAssign(smoothstep(0.28, 0.5, vHeight)); // 波谷处泡沫渐隐
+
+    // 岛屿浅水碎浪带：碰撞半径附近一圈泡沫（烘焙常量），贴图打散 + 随时间呼吸
+    const surf = float(0).toVar();
+    let phase = 0;
+    for (const isl of islands) {
+      if (!isl || isl.radius < 0.1) continue;
+      const rr = float(isl.radius).add(sin(uniforms.uTime.mul(0.7).add(phase)).mul(1.5));
+      const d = length(vWorldPos.xz.sub(vec2(isl.x, isl.z)));
+      surf.assign(max(surf, float(1).sub(smoothstep(0.0, 7.0, abs(d.sub(rr))))));
+      phase += 1.7;
+    }
+    const surfN = texture(normalMap, vWorldPos.xz.mul(0.05).add(vec2(uniforms.uTime.mul(0.012), uniforms.uTime.mul(-0.008)))).g;
+    surf.mulAssign(float(0.55).add(surfN.mul(0.45)));
+    foam.assign(max(foam, surf));
+
+    foam.mulAssign(float(1).sub(smoothstep(150.0, 320.0, camDist))); // 远处淡出
+    col.assign(mix(col, uniforms.uFoamColor.mul(float(0.3).add(uniforms.uDaylight.mul(0.7))), clamp(foam, 0, 1).mul(0.9)));
+
+    return col;
+  })();
+
+  const material = new THREE.NodeMaterial();
+  material.positionNode = positionNode;
+  material.colorNode = colorNode;
+  material.fog = true; // NodeMaterial 自动接入场景雾
+
+  const mesh = new THREE.Mesh(geo, material);
+  mesh.frustumCulled = false;
 
   return {
     mesh,

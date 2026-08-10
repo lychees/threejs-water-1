@@ -11,75 +11,60 @@ import { createWorld, ISLAND_DEFS } from './world.js';
 import { WakeManager } from './wake.js';
 import { Weather } from './weather.js';
 import { DayTime } from './daytime.js';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { Fn, pass, uv, uniform, vec2, vec3, vec4, sin, abs, exp, smoothstep } from 'three/tsl';
 import { GameAudio } from './audio.js';
 
-// ===== 渲染器 / 场景 / 相机 =====
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+// ===== 渲染器（WebGPU 优先，WebGL2 回退；同一份 TSL 代码两种后端） =====
+let forceWebGL = true;
+if (navigator.gpu) {
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    forceWebGL = !adapter;
+  } catch {
+    forceWebGL = true;
+  }
+}
+if (forceWebGL && !document.createElement('canvas').getContext('webgl2')) {
+  document.body.innerHTML = '<div style="color:#fff;padding:40px;font-size:18px;">当前浏览器不支持 WebGPU / WebGL2，无法运行游戏。</div>';
+  throw new Error('WebGPU/WebGL2 unavailable');
+}
+const renderer = new THREE.WebGPURenderer({ antialias: true, forceWebGL });
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
 document.getElementById('app').appendChild(renderer.domElement);
+await renderer.init();
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 2000);
 
-// ===== 后处理：RenderPass → 水下折射/水线 meniscus → OutputPass =====
-// r160 中渲染到 RenderTarget 时材质不做色调映射/sRGB 转换，最终由 OutputPass 统一处理（与直出等价）
-const WarpShader = {
-  uniforms: {
-    tDiffuse: { value: null },
-    uTime: { value: 0 },
-    uWarp: { value: 0 },       // 水下折射扰动强度 = underT × 天气 warp
-    uMeniscus: { value: 0 },   // 水线亮带强度（相机在波面 ±0.5m 内）
-    uWaterlineY: { value: 0.5 }, // 水线的屏幕 y（0~1，由相机俯仰近似推算）
-  },
-  vertexShader: /* glsl */ `
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `,
-  fragmentShader: /* glsl */ `
-    uniform sampler2D tDiffuse;
-    uniform float uTime;
-    uniform float uWarp;
-    uniform float uMeniscus;
-    uniform float uWaterlineY;
-    varying vec2 vUv;
-
-    void main() {
-      vec2 uv = vUv;
-      // 水下折射扰动：两组正弦扭动（强度随天气分级）
-      if (uWarp > 0.001) {
-        uv.x += sin(uv.y * 30.0 + uTime * 2.2) * 0.006 * uWarp
-              + sin(uv.y * 13.0 - uTime * 1.3) * 0.004 * uWarp;
-        uv.y += sin(uv.x * 24.0 - uTime * 1.8) * 0.006 * uWarp;
-      }
-      vec4 col = texture2D(tDiffuse, uv);
-      // meniscus：水线附近的水平亮带 + 下方轻微压暗模拟透镜拉伸
-      if (uMeniscus > 0.001) {
-        float d = abs(vUv.y - uWaterlineY);
-        float band = exp(-d * d * 900.0);
-        col.rgb += vec3(0.9, 0.97, 1.0) * band * uMeniscus * 0.5;
-        float below = smoothstep(0.0, 0.06, uWaterlineY - vUv.y) * uMeniscus;
-        col.rgb *= 1.0 - below * 0.08;
-      }
-      gl_FragColor = col;
-    }
-  `,
+// ===== 后处理（WebGPU PostProcessing）：场景 pass → 水下折射/水线 meniscus（TSL） =====
+// PostProcessing 输出端自动做色调映射 + sRGB（outputColorTransform 默认开），与原管线等价
+const warpU = {
+  uTime: uniform(0),
+  uWarp: uniform(0),       // 水下折射扰动强度 = underT × 天气 warp
+  uMeniscus: uniform(0),   // 水线亮带强度（相机在波面 ±0.5m 内）
+  uWaterlineY: uniform(0.5), // 水线的屏幕 y（0~1，由相机俯仰近似推算）
 };
-const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
-const warpPass = new ShaderPass(WarpShader);
-composer.addPass(warpPass);
-composer.addPass(new OutputPass());
+const postProcessing = new THREE.PostProcessing(renderer);
+const scenePass = pass(scene, camera);
+const sceneColor = scenePass.getTextureNode();
+postProcessing.outputNode = Fn(() => {
+  const uv0 = uv().toVar();
+  // 水下折射扰动：两组正弦扭动（强度随天气分级）
+  const dx = sin(uv0.y.mul(30.0).add(warpU.uTime.mul(2.2))).mul(0.006).mul(warpU.uWarp)
+    .add(sin(uv0.y.mul(13.0).sub(warpU.uTime.mul(1.3))).mul(0.004).mul(warpU.uWarp));
+  const dy = sin(uv0.x.mul(24.0).sub(warpU.uTime.mul(1.8))).mul(0.006).mul(warpU.uWarp);
+  const col = sceneColor.sample(uv0.add(vec2(dx, dy))).rgb.toVar();
+  // meniscus：水线附近的水平亮带 + 下方轻微压暗模拟透镜拉伸
+  const d = abs(uv0.y.sub(warpU.uWaterlineY));
+  const band = exp(d.mul(d).mul(900.0).negate());
+  col.addAssign(vec3(0.9, 0.97, 1.0).mul(band).mul(warpU.uMeniscus).mul(0.5));
+  const below = smoothstep(0.0, 0.06, warpU.uWaterlineY.sub(uv0.y)).mul(warpU.uMeniscus);
+  col.mulAssign(below.mul(0.08).oneMinus());
+  return vec4(col, 1.0);
+})();
 let menT = 0; // meniscus 强度（平滑）
 const camDirVec = new THREE.Vector3();
 
@@ -87,7 +72,6 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  composer.setSize(window.innerWidth, window.innerHeight);
 });
 
 // ===== 世界 =====
@@ -130,7 +114,6 @@ function applyQuality(q) {
   const def = QUALITY_LEVELS[q];
   sessionStorage.setItem(QUALITY_KEY, q);
   renderer.setPixelRatio(def.pixelRatio);
-  composer.setPixelRatio(def.pixelRatio);
   water.setDetailWaves(def.detailWaves);
   combat.particleScale = def.particleScale;
   weather.setRainDensity(def.rainDensity);
@@ -273,6 +256,19 @@ function statBar(label, ratio) {
     `<span class="sbar"><div style="width:${Math.round(Math.min(1, ratio) * 100)}%"></div></span></div>`;
 }
 
+// 缩略图统一走异步（WebGPURenderer 需 init）：先放占位，渲染完成后替换
+function setCardThumb(card, urlPromise, alt) {
+  Promise.resolve(urlPromise).then((url) => {
+    if (!url) return;
+    const ph = card.querySelector('.thumb-fallback');
+    if (!ph) return;
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = alt;
+    ph.replaceWith(img);
+  });
+}
+
 function buildShipCards() {
   const wrap = $('ship-select');
   wrap.innerHTML = ''; // 支持重建（切换精致模型勾选时）
@@ -280,19 +276,13 @@ function buildShipCards() {
     const stats = SHIP_STATS[def.id] || FALLBACK_STATS;
     const useModel = fancyModel && def.model;
     // 缩略图：勾选精致模型才用真实模型（预制 thumb 或加载后实拍）；否则程序化低模实拍
-    let thumb;
-    if (useModel) {
-      thumb = SHIP_MODELS[def.model].thumb;
-    } else {
-      const t = buildShip(def.spec);
-      thumb = renderShipThumbnail(t.group);
-    }
+    const presetThumb = useModel ? SHIP_MODELS[def.model].thumb : null;
 
     const card = document.createElement('div');
     card.className = 'ship-card' + (def.id === selectedShipId ? ' selected' : '');
     card.dataset.ship = def.id;
     card.innerHTML =
-      (thumb ? `<img src="${thumb}" alt="${def.cn}">` : `<div class="thumb-fallback">${def.cn}</div>`) +
+      (presetThumb ? `<img src="${presetThumb}" alt="${def.cn}">` : `<div class="thumb-fallback">${def.cn}</div>`) +
       (useModel ? '<span class="badge">★精致模型</span>' : '') +
       `<h3>${def.cn}</h3>` +
       `<div class="en-name">${def.en}</div>` +
@@ -309,20 +299,16 @@ function buildShipCards() {
     });
     wrap.appendChild(card);
 
-    // 无预制缩略图的精致模型：勾选状态下按需加载，完成后用同一离屏管线实拍一张补上
-    if (useModel && !thumb) {
-      loadShipModel(def.model).then((template) => {
-        if (!template) return;
-        const url = renderShipThumbnail(template, { dispose: false }); // 模板几何体共享，不可销毁
-        if (!url) return;
-        const ph = card.querySelector('.thumb-fallback');
-        if (ph) {
-          const img = document.createElement('img');
-          img.src = url;
-          img.alt = def.cn;
-          ph.replaceWith(img);
-        }
-      });
+    if (!presetThumb) {
+      if (useModel) {
+        // 无预制缩略图的精致模型：勾选状态下按需加载，完成后实拍一张补上
+        setCardThumb(card, loadShipModel(def.model).then((template) =>
+          template ? renderShipThumbnail(template, { dispose: false }) : null), def.cn);
+      } else {
+        // 程序化低模：生成副本离屏实拍
+        const t = buildShip(def.spec);
+        setCardThumb(card, renderShipThumbnail(t.group), def.cn);
+      }
     }
   }
 }
@@ -1057,17 +1043,17 @@ function updateUnderwater(dt, time) {
   // TODO(音频): 此处可用 underT 驱动环境音低通滤波实现闷化（已通过 setEnvironment 接入）
 
   // ---- 后处理 uniform：水下折射扰动 + 水线 meniscus ----
-  warpPass.uniforms.uTime.value = time;
-  warpPass.uniforms.uWarp.value = underT * weather.warp; // 扰动强度按天气分级
+  warpU.uTime.value = time;
+  warpU.uWarp.value = underT * weather.warp; // 扰动强度按天气分级
   const camWaveDist = Math.abs(cam.y - getWaveHeight(cam.x, cam.z, time));
   const menTarget = THREE.MathUtils.clamp(1 - camWaveDist / 0.5, 0, 1);
   menT += (menTarget - menT) * Math.min(1, dt * 8);
-  warpPass.uniforms.uMeniscus.value = menT;
+  warpU.uMeniscus.value = menT;
   // 水线屏幕 y 近似：由相机俯仰推算水平视线的落点
   camera.getWorldDirection(camDirVec);
   const pitch = Math.asin(THREE.MathUtils.clamp(camDirVec.y, -1, 1));
   const ndcY = -Math.tan(pitch) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-  warpPass.uniforms.uWaterlineY.value = THREE.MathUtils.clamp(0.5 + 0.5 * ndcY, -0.5, 1.5);
+  warpU.uWaterlineY.value = THREE.MathUtils.clamp(0.5 + 0.5 * ndcY, -0.5, 1.5);
 }
 
 // ===== 船只碰撞（椭圆碰撞体 + 撞击伤害） =====
@@ -1297,5 +1283,5 @@ renderer.setAnimationLoop(() => {
   if ((mmFrame++ & 3) === 0) drawMinimap(); // 小地图 ~15fps 节流
   updateHUD();
 
-  composer.render();
+  postProcessing.render();
 });

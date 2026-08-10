@@ -419,14 +419,24 @@ export function buildFigurehead(kind) {
 // ================= 缩略图：共享离屏 renderer，渲染一帧转 dataURL =================
 // dispose=true 用于程序化船副本（渲染完释放几何体）；
 // dispose=false 用于真实模型模板（几何体与游戏内克隆共享，绝不能销毁）
+// WebGPU 迁移：用独立的 WebGPURenderer（强制 WebGL2 后端 + preserveDrawingBuffer，
+// 保证 toDataURL 能读到帧），异步 init，返回 Promise
 let thumbRenderer = null;
-export function renderShipThumbnail(group, { dispose = true } = {}) {
+let thumbRendererReady = null;
+function getThumbRenderer() {
+  if (!thumbRenderer) {
+    thumbRenderer = new THREE.WebGPURenderer({ antialias: true, preserveDrawingBuffer: true, forceWebGL: true });
+    thumbRenderer.setSize(220, 110);
+    thumbRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+    thumbRenderer.toneMappingExposure = 1.1;
+    thumbRendererReady = thumbRenderer.init();
+  }
+  return thumbRendererReady;
+}
+
+export async function renderShipThumbnail(group, { dispose = true } = {}) {
   try {
-    if (!thumbRenderer) {
-      thumbRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-      thumbRenderer.setSize(220, 110);
-      thumbRenderer.outputColorSpace = THREE.SRGBColorSpace;
-    }
+    await getThumbRenderer();
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0d2f45);
     scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x2a4a3a, 1.2));
