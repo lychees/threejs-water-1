@@ -1,0 +1,98 @@
+/node_modules
+dist/
+.vite/
+*.local
+
+# Sketchfab API token. `scripts/fetch-assets.mjs` reads it from
+# SKETCHFAB_API_TOKEN or from this file; it is a personal credential and must
+# never be committed. See the Sketchfab section of ASSET_LICENSES.md.
+sketchfab-token
+
+# Research credentials (Firecrawl, Apify). Same rule as the Sketchfab token:
+# personal, and nothing in the build reads them — they exist so a session can
+# reach documentation that is behind a bot challenge. This entry is load-bearing
+# rather than tidy: the workflow in this repository uses `git add -A`, so an
+# unignored `.env` is one commit away from being published.
+.env
+.env.*
+!.env.example
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+.playwright-mcp/
+
+# Verification-loop scratch output
+local-*.png
+diff-*.png
+tests/__screenshots__/actual/
+
+# Captures of the third-party reference site. Kept locally to drive the visual
+# comparison loop, deliberately not redistributed in this repository.
+reference/shots/
+
+# Raw asset downloads for the scene dressing.
+#
+# `scripts/fetch-assets.mjs` pulls Poly Haven's and Sketchfab's film-quality
+# source — 555 MB of it — and `scripts/optimize-assets.mjs` decimates and
+# Meshopt-encodes that into `public/models/dressing/*.glb`, which is what ships
+# and what is committed. Both steps are reproducible, so the source has no
+# business in the history: keeping it would multiply the repository by fifteen to
+# store geometry no frame draws.
+#
+# It lives outside `public/` for a second reason. Vite copies `public/` into
+# `dist/` verbatim, so while these sat there the optimiser was being undone one
+# directory up and the build shipped 818 MB. `public/models/` now holds only what
+# a URL points at: the ship, the buoy, the barrel, the two silhouette rocks, and
+# the `dressing/` outputs.
+#
+# Re-fetching the Sketchfab half needs a personal API token, so a contributor
+# without one still gets a working build from the committed outputs.
+assets/source/
+
+# Scratch space for `scripts/modelkit/sketchfab.mjs get`, which lands a candidate
+# here so `inspect`/`shells`/`plates` and the viewer can be pointed at it before
+# anyone decides whether it is worth a manifest entry. Nothing here ships.
+public/models/_preview/
+
+# Reference material fetched for study, never for reuse. Shadertoy's default
+# licence is CC BY-NC-SA 3.0 and two of the shaders in here are stricter still,
+# so this must not enter the tree: doing so would relicense the project. See
+# research/shadertoy/README.md, which records the terms and what was taken from
+# each one as *technique*.
+research/
+
+# Scratch capture specs used for eyeballing tuning changes between tasks.
+tests/_probe*.spec.ts
+
+# Impeccable's design skill, installed with `npx impeccable install`. Six harness
+# directories, each a full copy of the same ~150 files, because the installer
+# targets every harness it finds on the machine rather than the one in use.
+#
+# Untracked rather than vendored: it is tooling for whoever is editing the UI,
+# not part of what this project builds or ships, and its own guidance is that a
+# team wanting it pinned should use the git-submodule install instead. The design
+# decisions it produced are recorded in PRODUCT.md and DESIGN.md, which *are*
+# tracked — those are the durable artefacts.
+.agents/
+.claude/
+.codex/
+.cursor/
+.gemini/
+.opencode/
+.impeccable/config.local.json
+.impeccable/hook.cache.json
+.impeccable/*.png
+.impeccable/live/sessions/
+.impeccable/live/previews/
+# Transcripts of the decision pages the skill serves while a direction is being
+# chosen. The *outcome* is recorded in the direction contract at the top of
+# index.html and in DESIGN.md; these are the scratch behind it.
+.impeccable/questions/
+
+# Scratch capture harness — drives a headless browser against its own preview
+# server to screenshot the UI while a design change is being judged. Kept out of
+# `scripts/` because nothing in the build or the suite calls it.
+_shoot.mjs
+kimi-export-session_*.md

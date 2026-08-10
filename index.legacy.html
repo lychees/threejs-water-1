@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>怒海争锋 · Three.js 海战小游戏</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #0a2a3a; font-family: "Microsoft YaHei", sans-serif; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* ===== HUD ===== */
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  #top-bar { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 28px; font-size: 18px; font-weight: bold; }
+  .stat { background: rgba(0, 20, 35, .45); padding: 6px 16px; border-radius: 20px; border: 1px solid rgba(255,255,255,.25); }
+
+  #hp-wrap { position: absolute; left: 24px; bottom: 24px; width: 260px; }
+  .bar-label { font-size: 13px; margin-bottom: 4px; letter-spacing: 1px; }
+  .bar { height: 16px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.4); border-radius: 8px; overflow: hidden; }
+  .bar > div { height: 100%; transition: width .15s; }
+  #hp-fill { width: 100%; background: linear-gradient(90deg, #e74c3c, #2ecc71); }
+  #sail-state { margin-top: 8px; font-size: 14px; }
+  #debuffs { margin-top: 6px; min-height: 20px; display: flex; gap: 10px; font-size: 15px; }
+
+  #reload-wrap { position: absolute; right: 24px; bottom: 24px; width: 220px; text-align: right; }
+  .reload-row { margin-top: 6px; font-size: 14px; }
+  .reload-bar { height: 8px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.35); border-radius: 4px; overflow: hidden; margin-top: 2px; }
+  .reload-bar > div { height: 100%; background: #f1c40f; width: 100%; }
+
+  #help { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); font-size: 12.5px; opacity: .85; background: rgba(0,20,35,.4); padding: 6px 14px; border-radius: 8px; white-space: nowrap; }
+
+  /* ===== 遮罩 ===== */
+  .overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(4, 24, 40, .78); color: #fff; z-index: 10; text-align: center; }
+  .overlay h1 { font-size: 44px; margin: 0 0 12px; letter-spacing: 6px; }
+  .overlay p { font-size: 16px; line-height: 1.9; margin: 4px 0; opacity: .9; }
+  .overlay button { margin-top: 26px; font-size: 20px; padding: 12px 46px; border: none; border-radius: 30px; cursor: pointer; background: #e8a33d; color: #3a2405; font-weight: bold; letter-spacing: 4px; }
+  .overlay button:hover { background: #f5bc63; }
+  .hidden { display: none !important; }
+
+  /* ===== 水下色调遮罩 ===== */
+  #uw-overlay { position: fixed; inset: 0; pointer-events: none; z-index: 5; opacity: 0; background: linear-gradient(rgba(12, 78, 88, .5), rgba(5, 38, 52, .68)); }
+
+  /* ===== HUD 小按钮 ===== */
+  .hud-btn { pointer-events: auto; cursor: pointer; color: #fff; font-size: 15px; font-weight: bold; font-family: inherit; }
+  .hud-btn:hover { border-color: #e8a33d; }
+  #weather-stat, #cam-stat, #clock-stat { pointer-events: auto; cursor: pointer; }
+  #weather-stat:hover, #cam-stat:hover, #clock-stat:hover { border-color: #e8a33d; }
+
+  /* ===== 敌船血条（世界锚定，池化） ===== */
+  .enemy-hp { position: absolute; width: 90px; transform: translate(-50%, -100%); pointer-events: none; display: none; }
+  .enemy-hp .ehp-name { font-size: 10px; text-align: center; opacity: .85; margin-bottom: 2px; }
+  .enemy-hp .ehp-bar { height: 6px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.35); border-radius: 3px; overflow: hidden; }
+  .enemy-hp .ehp-fill { height: 100%; background: #e0483e; width: 100%; }
+
+  /* ===== 小地图 ===== */
+  #minimap { position: absolute; top: 16px; right: 20px; width: 180px; height: 180px; border-radius: 50%; border: 2.5px solid rgba(232,163,61,.75); box-shadow: 0 0 12px rgba(0,0,0,.5); pointer-events: auto; cursor: pointer; }
+  #minimap.large { width: 340px; height: 340px; }
+
+  /* ===== 触屏控件 ===== */
+  #touch-ui { display: none; }
+  body.touch #touch-ui { display: block; }
+  #joystick { position: fixed; left: 30px; bottom: 130px; width: 130px; height: 130px; border-radius: 50%; background: rgba(0,20,35,.4); border: 2px solid rgba(255,255,255,.3); pointer-events: auto; touch-action: none; z-index: 6; }
+  #joy-knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; background: rgba(232,163,61,.75); border: 2px solid rgba(255,255,255,.5); pointer-events: none; }
+  #touch-fire { position: fixed; right: 30px; bottom: 130px; display: flex; flex-direction: column; gap: 14px; z-index: 6; }
+  #touch-fire button { width: 84px; height: 64px; border-radius: 16px; border: 2px solid rgba(255,255,255,.35); background: rgba(0,20,35,.5); color: #fff; font-size: 17px; font-weight: bold; pointer-events: auto; touch-action: none; }
+  #touch-fire button:active { background: rgba(232,163,61,.5); }
+
+  /* ===== 拾取飘字 ===== */
+  .float-text { position: absolute; left: 50%; bottom: 30%; transform: translateX(-50%); font-size: 22px; font-weight: bold; color: #ffd76e; text-shadow: 0 2px 6px rgba(0,0,0,.7); animation: floatUp 1.5s ease-out forwards; pointer-events: none; }
+  @keyframes floatUp {
+    0% { opacity: 0; transform: translateX(-50%) translateY(10px); }
+    15% { opacity: 1; }
+    100% { opacity: 0; transform: translateX(-50%) translateY(-70px); }
+  }
+
+  /* ===== 选船卡片（可滚动网格） ===== */
+  #start-overlay { justify-content: flex-start; overflow-y: auto; padding: 5vh 16px; }
+  #ship-select { display: grid; grid-template-columns: repeat(5, 168px); gap: 12px; margin-top: 22px; max-height: 52vh; overflow-y: auto; padding: 6px; }
+  .ship-card { position: relative; background: rgba(0, 20, 35, .55); border: 2px solid rgba(255,255,255,.2); border-radius: 12px; padding: 10px; cursor: pointer; transition: border-color .15s, transform .15s, box-shadow .15s; }
+  .ship-card:hover { transform: translateY(-3px); border-color: rgba(232,163,61,.6); }
+  .ship-card.selected { border-color: #e8a33d; box-shadow: 0 0 14px rgba(232,163,61,.45); }
+  .ship-card img { width: 100%; border-radius: 8px; display: block; background: rgba(255,255,255,.06); }
+  .ship-card .thumb-fallback { width: 100%; aspect-ratio: 2; border-radius: 8px; background: rgba(255,255,255,.08); display: flex; align-items: center; justify-content: center; font-size: 14px; opacity: .7; }
+  .ship-card .badge { position: absolute; top: 14px; left: 14px; background: #e8a33d; color: #3a2405; font-size: 10px; font-weight: bold; padding: 2px 7px; border-radius: 8px; }
+  .ship-card h3 { margin: 8px 0 2px; font-size: 15px; letter-spacing: 2px; font-weight: bold; }
+  .ship-card .en-name { font-size: 10.5px; opacity: .6; margin-bottom: 6px; letter-spacing: .5px; }
+  .stat-row { display: flex; align-items: center; gap: 6px; font-size: 11px; margin-top: 3px; }
+  .stat-row .lbl { width: 18px; text-align: center; opacity: .85; }
+  .stat-row .sbar { flex: 1; height: 6px; background: rgba(0,0,0,.5); border: 1px solid rgba(255,255,255,.2); border-radius: 3px; overflow: hidden; }
+  .stat-row .sbar > div { height: 100%; background: #e8a33d; }
+
+  /* ===== 定制工具栏（精致模型勾选 / 染色 / 船首像） ===== */
+  #customize-bar { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 16px; margin-top: 16px; background: rgba(0, 20, 35, .45); border: 1px solid rgba(255,255,255,.2); border-radius: 12px; padding: 10px 18px; font-size: 13.5px; }
+  #customize-bar .opt { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  #customize-bar input[type="color"] { width: 34px; height: 22px; border: 1px solid rgba(255,255,255,.35); border-radius: 5px; background: none; padding: 0; cursor: pointer; }
+  #customize-bar input[type="checkbox"] { accent-color: #e8a33d; width: 15px; height: 15px; cursor: pointer; }
+  .fh-btn { background: rgba(0,0,0,.4); color: #fff; border: 1.5px solid rgba(255,255,255,.3); border-radius: 14px; padding: 3px 12px; font-size: 12.5px; cursor: pointer; }
+  .fh-btn:hover { border-color: rgba(232,163,61,.6); }
+  .fh-btn.selected { border-color: #e8a33d; background: rgba(232,163,61,.25); }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.182.0/build/three.webgpu.min.js",
+    "three/webgpu": "https://unpkg.com/three@0.182.0/build/three.webgpu.min.js",
+    "three/tsl": "https://unpkg.com/three@0.182.0/build/three.tsl.min.js",
+    "three/addons/": "https://unpkg.com/three@0.182.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app"></div>
+<!-- 水下色调遮罩（相机没入波面时淡入） -->
+<div id="uw-overlay"></div>
+
+<!-- 游戏内 HUD -->
+<div id="hud" class="hidden">
+  <div id="top-bar">
+    <div class="stat">击沉 <span id="kills">0</span></div>
+    <div class="stat">战利品 <span id="loot">0</span></div>
+    <div class="stat">第 <span id="wave">1</span> 波</div>
+    <div class="stat" id="weather-stat" title="点击切换天气">天气 <span id="weather-icon">☀️</span></div>
+    <div class="stat" id="clock-stat" title="点击快进 1 小时"><span id="clock-icon">🌞</span> <span id="clock">10:00</span></div>
+    <div class="stat" id="cam-stat" title="点击切换相机模式">相机 <span id="cam-mode">跟随</span></div>
+    <button id="quality-btn" class="stat hud-btn">画质：高</button>
+    <button id="mute-btn" class="stat hud-btn">🔊</button>
+  </div>
+  <canvas id="minimap" width="340" height="340" title="点击展开/收起海图"></canvas>
+  <div id="hp-wrap">
+    <div class="bar-label">船体耐久</div>
+    <div class="bar"><div id="hp-fill"></div></div>
+    <div id="debuffs"><span id="debuff-fire"></span><span id="debuff-leak"></span><span id="debuff-sail"></span></div>
+    <div id="sail-state">帆位：0%</div>
+  </div>
+  <div id="reload-wrap">
+    <div class="reload-row">左舷（按住左键 / Q 蓄力）<div class="reload-bar"><div id="reload-l"></div></div></div>
+    <div class="reload-row">右舷（按住右键 / E 蓄力）<div class="reload-bar"><div id="reload-r"></div></div></div>
+    <div class="reload-row">艏炮（按住空格蓄力）<div class="reload-bar"><div id="reload-b"></div></div></div>
+  </div>
+  <div id="help">W/S 升降帆调速 · A/D 转向 · 移动鼠标环视 · 左键/Q 左舷齐射 · 右键/E 右舷齐射 · 1/2/3 相机</div>
+</div>
+
+<!-- 触屏控件（仅触屏设备显示） -->
+<div id="touch-ui">
+  <div id="joystick"><div id="joy-knob"></div></div>
+  <div id="touch-fire">
+    <button id="fire-l">左舷</button>
+    <button id="fire-r">右舷</button>
+  </div>
+</div>
+
+<!-- 开始遮罩 -->
+<div id="start-overlay" class="overlay">
+  <h1>怒 海 争 锋</h1>
+  <p>W / S —— 升帆加速 / 降帆减速（共三档帆位）</p>
+  <p>A / D —— 左转 / 右转</p>
+  <p>移动鼠标 —— 环绕视角</p>
+  <p>鼠标左键 / Q —— 左舷齐射　　鼠标右键 / E —— 右舷齐射</p>
+  <p>把敌船引到舷侧再开火，击沉它们！</p>
+  <div id="ship-select"></div>
+  <div id="customize-bar">
+    <label class="opt"><input type="checkbox" id="fancy-model"> 使用精致模型（加载更慢）</label>
+    <label class="opt"><input type="checkbox" id="backend-webgpu"> WebGPU 渲染（取消强制 WebGL2，更改后自动刷新）</label>
+    <label class="opt">船帆色 <input type="color" id="sail-color" value="#f3ead5"></label>
+    <label class="opt">船体色 <input type="color" id="hull-color" value="#7a4f2a"></label>
+    <span class="opt">船首像</span>
+    <span id="fh-group"></span>
+  </div>
+  <button id="start-btn">出 航</button>
+</div>
+
+<!-- 结束遮罩 -->
+<div id="gameover-overlay" class="overlay hidden">
+  <h1>船 沉 了 …</h1>
+  <p>本次战绩：击沉敌船 <span id="final-kills">0</span> 艘 · 战利品 <span id="final-loot">0</span> 件</p>
+  <p>按 R 重新开始</p>
+</div>
+
+<script type="module" src="./js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+{
+  "shot": "ship-and-island",
+  "capturedAt": "2026-08-08T22:20:39.961Z",
+  "width": 1280,
+  "height": 720,
+  "definition": {
+    "state": {
+      "quality": "high",
+      "cameraMode": "orbit",
+      "windSpeed": 15,
+      "peakWavelength": 47,
+      "cloudCoverage": 0.32,
+      "preset": "skyPro"
+    },
+    "camera": {
+      "position": [
+        64,
+        15,
+        89
+      ],
+      "target": [
+        -214,
+        23,
+        -198
+      ]
+    },
+    "time": 36,
+    "settleSteps": 90
+  },
+  "stack": {
+    "backend": "webgpu",
+    "gpu": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5090 (0x00002B85) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+    "adapter": "nvidia/blackwell",
+    "browser": "Chrome/151.0.7922.34",
+    "width": 1280,
+    "height": 720,
+    "devicePixelRatio": 1
+  }
+}
