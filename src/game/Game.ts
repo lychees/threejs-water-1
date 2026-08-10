@@ -106,6 +106,10 @@ export class Game {
   private chargeL: number | null = null; // 蓄力进度秒数（null = 未按住）
   private chargeR: number | null = null;
   private chargeBow: number | null = null;
+  // 满装填：装填结束后再等 PRIME_TIME 秒进入满装填（射程更远伤害更高），开火消耗
+  private primeL = 0;
+  private primeR = 0;
+  private primeBow = 0;
   private gameOverT = 0;
   private gameOverShown = false;
   private time = 0;
@@ -298,6 +302,7 @@ export class Game {
     this.kills = 0;
     this.loot = 0;
     this.cooldownL = this.cooldownR = this.cooldownBow = 0;
+    this.primeL = this.primeR = this.primeBow = 0;
     this.chargeL = this.chargeR = this.chargeBow = null;
     this.collisionCooldowns.clear();
     this.state = 'playing';
@@ -373,6 +378,10 @@ export class Game {
     this.cooldownL = Math.max(0, this.cooldownL - dt);
     this.cooldownR = Math.max(0, this.cooldownR - dt);
     this.cooldownBow = Math.max(0, this.cooldownBow - dt);
+    // 满装填计时：冷却归零后开始累积（开火时清零）
+    if (this.cooldownL <= 0) this.primeL = Math.min(FEEL.PRIME_TIME, this.primeL + dt);
+    if (this.cooldownR <= 0) this.primeR = Math.min(FEEL.PRIME_TIME, this.primeR + dt);
+    if (this.cooldownBow <= 0) this.primeBow = Math.min(FEEL.PRIME_TIME, this.primeBow + dt);
 
     // ---- 实体更新 ----
     player.update(dt, this.heightAt);
@@ -471,6 +480,11 @@ export class Game {
       this.sailAmount,
       { l: this.cooldownL, r: this.cooldownR, bow: this.cooldownBow },
       { broadside: FEEL.RELOAD_TIME, bow: FEEL.BOW_RELOAD },
+      {
+        l: this.primeL >= FEEL.PRIME_TIME,
+        r: this.primeR >= FEEL.PRIME_TIME,
+        bow: this.primeBow >= FEEL.PRIME_TIME,
+      },
       this.kills,
       this.fleet.wave,
       this.loot,
@@ -580,27 +594,39 @@ export class Game {
   private fireCharged(side: -1 | 1, power: number): void {
     if (this.player.sinking) return;
     const p = Math.min(1, power);
+    // 满装填加成：初速/射程与伤害同时提升，开火后消耗
+    const primed = side < 0 ? this.primeL >= FEEL.PRIME_TIME : this.primeR >= FEEL.PRIME_TIME;
+    const primeS = primed ? FEEL.PRIME_SPEED_MUL : 1;
+    const primeD = primed ? FEEL.PRIME_DAMAGE_MUL : 1;
     this.combat.fireBroadside(this.player, side, {
-      speed: FEEL.BROADSIDE_SPEED * (0.6 + 0.9 * p), // 初速/射程随蓄力
+      speed: FEEL.BROADSIDE_SPEED * (0.6 + 0.9 * p) * primeS, // 初速/射程随蓄力
       spread: 0.05,
       fromPlayer: true, // 炮数取 ship.cannons
-      damageMul: 0.7 + 0.8 * p, // 伤害随蓄力
+      damageMul: (0.7 + 0.8 * p) * primeD, // 伤害随蓄力
     });
     this.audio.playCannon();
-    if (side < 0) this.cooldownL = FEEL.RELOAD_TIME;
-    else this.cooldownR = FEEL.RELOAD_TIME;
+    if (side < 0) {
+      this.cooldownL = FEEL.RELOAD_TIME;
+      this.primeL = 0;
+    } else {
+      this.cooldownR = FEEL.RELOAD_TIME;
+      this.primeR = 0;
+    }
   }
 
   /** 艏炮：单发、弹道平直；小船（炮数 ≤2）伤害 ×1.5 补偿。 */
   private fireBow(power: number): void {
     if (this.player.sinking) return;
     const p = Math.min(1, power);
+    const primed = this.primeBow >= FEEL.PRIME_TIME;
     this.combat.fireBowShot(this.player, {
-      speed: FEEL.BOW_SPEED * (0.6 + 0.9 * p),
-      damageMul: (0.7 + 0.8 * p) * (this.player.cannons <= 2 ? 1.5 : 1),
+      speed: FEEL.BOW_SPEED * (0.6 + 0.9 * p) * (primed ? FEEL.PRIME_SPEED_MUL : 1),
+      damageMul:
+        (0.7 + 0.8 * p) * (this.player.cannons <= 2 ? 1.5 : 1) * (primed ? FEEL.PRIME_DAMAGE_MUL : 1),
     });
     this.audio.playCannon();
     this.cooldownBow = FEEL.BOW_RELOAD;
+    this.primeBow = 0;
   }
 
   // ------------------------------------------------------------------ 命中与碰撞

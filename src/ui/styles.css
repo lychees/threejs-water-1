@@ -1511,6 +1511,18 @@ body {
   background: var(--bone-dim);
 }
 
+/* 满装填：装填满后再等半格进入，亮金发光提示（射程/伤害加成） */
+.ghud__fill--reload.ghud__fill--primed {
+  background: #ffd76e;
+  box-shadow: 0 0 8px rgba(255, 215, 110, 0.8);
+  animation: ghud-primed-pulse 0.9s ease-in-out infinite alternate;
+}
+
+@keyframes ghud-primed-pulse {
+  from { filter: brightness(1); }
+  to { filter: brightness(1.35); }
+}
+
 .ghud__sail {
   font-size: 11px;
   color: var(--bone-dim);

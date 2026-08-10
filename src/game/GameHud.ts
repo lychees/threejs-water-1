@@ -136,6 +136,7 @@ export class GameHud {
     sailAmount: number,
     cooldowns: { l: number; r: number; bow: number },
     reloadMax: { broadside: number; bow: number },
+    primed: { l: boolean; r: boolean; bow: boolean },
     kills: number,
     wave: number,
     loot = 0,
@@ -182,6 +183,10 @@ export class GameHud {
       c.reloadB = rb;
       this.reloadB.style.width = `${rb}%`;
     }
+    // 满装填：装填满后再等半格进入，条变亮白发光提示（开火后消失）
+    this.reloadL.classList.toggle('ghud__fill--primed', primed.l);
+    this.reloadR.classList.toggle('ghud__fill--primed', primed.r);
+    this.reloadB.classList.toggle('ghud__fill--primed', primed.bow);
     // 玩家 debuff 图标（带剩余秒数）
     const fire = player.debuff.fire > 0 ? `🔥 ${Math.ceil(player.debuff.fire)}s` : '';
     const leak = player.debuff.leak > 0 ? `💧 ${Math.ceil(player.debuff.leak)}s` : '';
