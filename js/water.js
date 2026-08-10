@@ -24,7 +24,7 @@ const RAW_WAVES = [
 const WAVE_COUNT = RAW_WAVES.length;
 
 // ---- 程序化法线贴图：可平铺分形值噪声 → 高度场 → 中心差分转法线（一次性 CPU 生成） ----
-function generateWaterNormalMap(size = 512) {
+export function generateWaterNormalMap(size = 512) {
   // 分形八度：格子数 ×2 递增，每层独立打乱表；格点按周期环绕 → 贴图可平铺
   const octaves = [6, 12, 24, 48].map((cells) => {
     const perm = new Uint8Array(cells);
@@ -111,9 +111,13 @@ const WAVES = RAW_WAVES.map((w) => {
 // 天气系统通过 setWaveScale 全局缩放振幅，CPU 与 GPU 保持一致
 let cpuWaveScale = 1;
 let waterUniforms = null; // createWater 后指向其 uniforms
+let oceanScaleHook = null;  // FFT 海面（ocean.js）注册的风速映射钩子
+export function registerOceanScaleHook(fn) { oceanScaleHook = fn; }
+
 export function setWaveScale(s) {
   cpuWaveScale = s;
   if (waterUniforms) waterUniforms.uWaveScale.value = s;
+  if (oceanScaleHook) oceanScaleHook(s); // FFT 路径：浪幅 → 风速
 }
 
 export function getWaveHeight(x, z, t) {

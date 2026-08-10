@@ -1,6 +1,7 @@
 // 入口：场景装配、输入、相机、HUD、游戏状态机、主循环
 import * as THREE from 'three';
 import { createWater, getWaveHeight } from './water.js';
+import { createOcean } from './ocean.js';
 import { createSky, SUN_DIR } from './sky.js';
 import { Ship, DEBUFF_DEFS } from './ship.js';
 import { Combat, BALL_GRAVITY } from './combat.js';
@@ -14,13 +15,18 @@ import { DayTime } from './daytime.js';
 import { Fn, pass, uv, uniform, vec2, vec3, vec4, sin, abs, exp, smoothstep } from 'three/tsl';
 import { GameAudio } from './audio.js';
 
-// ===== 渲染器（WebGPU 优先，WebGL2 回退；同一份 TSL 代码两种后端） =====
-let forceWebGL = true;
-if (navigator.gpu) {
-  try {
-    const adapter = await navigator.gpu.requestAdapter();
-    forceWebGL = !adapter;
-  } catch {
+// ===== 渲染器（WebGPU 优先，WebGL2 回退；用户可在开始界面强制 WebGL2） =====
+const backendPref = sessionStorage.getItem('waters-backend') || 'webgpu';
+let forceWebGL = backendPref === 'webgl';
+if (!forceWebGL) {
+  if (navigator.gpu) {
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      forceWebGL = !adapter;
+    } catch {
+      forceWebGL = true;
+    }
+  } else {
     forceWebGL = true;
   }
 }
@@ -78,10 +84,23 @@ window.addEventListener('resize', () => {
 const sky = createSky(scene);
 // 岛屿碎浪带 uniform 数据（与 world.js 碰撞半径同源：size × 0.45）
 const SURF_ISLANDS = ISLAND_DEFS.map((d) => ({ x: d.pos[0], z: d.pos[1], radius: d.size * 0.45 }));
-const water = createWater(SUN_DIR, SURF_ISLANDS);
+// 双路径海面：WebGPU 原生 → JONSWAP+FFT（ocean.js）；WebGL2 回退 → Gerstner（water.js）
+let water;
+if (!forceWebGL) {
+  try {
+    water = createOcean(renderer, SUN_DIR, SURF_ISLANDS);
+    console.info('[ocean] FFT 海面已启用');
+  } catch (e) {
+    console.warn('[ocean] FFT 海面初始化失败，回退 Gerstner：', e);
+    water = null;
+  }
+}
+if (!water) water = createWater(SUN_DIR, SURF_ISLANDS);
+// FFT 路径自带 CPU 波高（32 分量正弦叠加），Gerstner 路径用 water.js 的
+const waveFn = water.getWaveHeight || getWaveHeight;
 scene.add(water.mesh);
-const combat = new Combat(scene, getWaveHeight);
-const wakes = new WakeManager(scene, getWaveHeight);
+const combat = new Combat(scene, waveFn);
+const wakes = new WakeManager(scene, waveFn);
 const weather = new Weather({
   scene, camera, renderer,
   waterUniforms: water.uniforms,
@@ -150,7 +169,7 @@ const fleet = new EnemyFleet(scene, combat);
 
 // ===== 世界场景资产（岛屿/要塞/浮标/漂浮补给）：并行异步加载，不阻塞游戏开始 =====
 let world = null;
-createWorld(scene, getWaveHeight).then((w) => { world = w; });
+createWorld(scene, waveFn).then((w) => { world = w; });
 
 // ===== 玩家选船：大航海时代2 全 25 种，fetch ships.json 数据驱动属性 =====
 const STORAGE_KEY = 'waters-ship';
@@ -338,6 +357,14 @@ function initCustomizeUI() {
     hullColor = hullInput.value;
     sessionStorage.setItem(KEY_HULL_COLOR, hullColor);
     applyShipChoice(selectedShipId);
+  });
+
+  // 渲染后端开关（更改后刷新生效；FFT 海面只在 WebGPU 原生后端启用）
+  const beChk = $('backend-webgpu');
+  beChk.checked = (sessionStorage.getItem('waters-backend') || 'webgpu') === 'webgpu';
+  beChk.addEventListener('change', () => {
+    sessionStorage.setItem('waters-backend', beChk.checked ? 'webgpu' : 'webgl');
+    location.reload();
   });
 
   // 船首像按钮组：按注册表动态生成（含新增精致模型项）
@@ -796,8 +823,8 @@ function updateFanViz(mesh, charge, side, time) {
     const zi = sz + cosA * rIn;
     const xo = sx + sinA * rOut;
     const zo = sz + cosA * rOut;
-    attr.setXYZ(i * 2, xi, getWaveHeight(xi, zi, time) + 0.6, zi);
-    attr.setXYZ(i * 2 + 1, xo, getWaveHeight(xo, zo, time) + 0.6, zo);
+    attr.setXYZ(i * 2, xi, waveFn(xi, zi, time) + 0.6, zi);
+    attr.setXYZ(i * 2 + 1, xo, waveFn(xo, zo, time) + 0.6, zo);
   }
   attr.needsUpdate = true;
   mesh.visible = true;
@@ -1008,11 +1035,11 @@ function updateCamera(dt, time) {
 
   // 跟随/环绕：镜头受波浪轻微影响；允许入水（水下过渡），保底不坠向海底
   if (camMode !== 3) {
-    const waveAtCam = getWaveHeight(pos.x, pos.z, time);
+    const waveAtCam = waveFn(pos.x, pos.z, time);
     pos.y += waveAtCam * 0.25;
     pos.y = Math.max(pos.y, waveAtCam - CAM_MAX_DIP);
   } else {
-    pos.y = Math.max(pos.y, getWaveHeight(pos.x, pos.z, time) - CAM_MAX_DIP);
+    pos.y = Math.max(pos.y, waveFn(pos.x, pos.z, time) - CAM_MAX_DIP);
   }
 
   // 模式切换 0.5s 平滑过渡
@@ -1032,7 +1059,7 @@ function updateCamera(dt, time) {
 // 水下过渡：镜头低于当地波面 → 浓雾 + 蓝绿遮罩，0.3s 插值
 function updateUnderwater(dt, time) {
   const cam = camera.position;
-  const target = cam.y < getWaveHeight(cam.x, cam.z, time) ? 1 : 0;
+  const target = cam.y < waveFn(cam.x, cam.z, time) ? 1 : 0;
   underT += (target - underT) * Math.min(1, dt / 0.3);
   if (scene.fog) {
     scene.fog.color.lerpColors(weather.fogColor, UNDER_FOG.color, underT); // 水上面跟随天气
@@ -1045,7 +1072,7 @@ function updateUnderwater(dt, time) {
   // ---- 后处理 uniform：水下折射扰动 + 水线 meniscus ----
   warpU.uTime.value = time;
   warpU.uWarp.value = underT * weather.warp; // 扰动强度按天气分级
-  const camWaveDist = Math.abs(cam.y - getWaveHeight(cam.x, cam.z, time));
+  const camWaveDist = Math.abs(cam.y - waveFn(cam.x, cam.z, time));
   const menTarget = THREE.MathUtils.clamp(1 - camWaveDist / 0.5, 0, 1);
   menT += (menTarget - menT) * Math.min(1, dt * 8);
   warpU.uMeniscus.value = menT;
@@ -1203,9 +1230,9 @@ renderer.setAnimationLoop(() => {
   cooldownBow = Math.max(0, cooldownBow - dt);
 
   // 实体更新
-  player.update(dt, time, getWaveHeight);
+  player.update(dt, time, waveFn);
   fleet.weatherSpeedMul = weather.speedMul; // 天气全船减速（敌船）
-  fleet.update(dt, time, player, getWaveHeight, fleetHooks);
+  fleet.update(dt, time, player, waveFn, fleetHooks);
   wakes.update(dt, time, [player, ...fleet.enemies]);
   resolveShipCollisions();
 
@@ -1238,7 +1265,7 @@ renderer.setAnimationLoop(() => {
       const pos = s.position.clone();
       pos.x += (Math.random() - 0.5) * 4;
       pos.z += (Math.random() - 0.5) * 4;
-      pos.y = getWaveHeight(pos.x, pos.z, time);
+      pos.y = waveFn(pos.x, pos.z, time);
       combat.bubbles(pos);
     }
   }
@@ -1257,7 +1284,7 @@ renderer.setAnimationLoop(() => {
       const pos = s.position.clone();
       pos.x += (Math.random() - 0.5) * 3;
       pos.z += (Math.random() - 0.5) * 3;
-      pos.y = getWaveHeight(pos.x, pos.z, time) + 0.1;
+      pos.y = waveFn(pos.x, pos.z, time) + 0.1;
       combat.splash(pos);
     }
   }
