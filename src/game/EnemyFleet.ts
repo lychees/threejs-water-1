@@ -37,6 +37,7 @@ export class EnemyFleet {
   readonly enemies: GameShip[] = [];
   wave = 1;
   killsThisWave = 0;
+  weatherSpeedMul = 1; // 由 Game 每帧写入：雨天全船减速
 
   private readonly scene: THREE.Scene;
   private readonly combat: Combat;
@@ -132,7 +133,7 @@ export class EnemyFleet {
         desired = angleToP + e.orbitDir * Math.PI * 0.5;
       }
       e.turnToward(desired, dt);
-      const targetSpeed = (dist > 20 ? e.maxSpeed : e.maxSpeed * 0.55) * e.speedMul;
+      const targetSpeed = (dist > 20 ? e.maxSpeed : e.maxSpeed * 0.55) * e.speedMul * this.weatherSpeedMul;
       e.speed += (targetSpeed - e.speed) * Math.min(1, dt * 1.5);
 
       // 开火：舷侧大致对准玩家且进入射程

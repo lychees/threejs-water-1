@@ -22,7 +22,7 @@ const REPAIR_AMOUNT = 10;
 
 export type SupplyKind = 'repair' | 'loot';
 
-interface Supply {
+export interface Supply {
   kind: SupplyKind;
   object: THREE.Object3D;
   active: boolean;
@@ -36,7 +36,7 @@ export interface PickupEvent {
 }
 
 export class Supplies {
-  private readonly items: Supply[] = [];
+  readonly items: Supply[] = [];
 
   private constructor(
     scene: THREE.Scene,

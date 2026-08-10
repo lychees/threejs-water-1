@@ -27,11 +27,17 @@ import { makeFanViz, updateFanViz } from './FanViz';
 import { Supplies } from './Supplies';
 import {
   buildShip,
+  buildFigurehead,
   getShipDef,
   resolveShipId,
+  resolveCustomization,
   BASE_LENGTH,
+  type ShipDef,
+  type ShipCustomization,
   type ShipStats,
 } from './Shipyard';
+import { loadShipModel, instantiateShip, SHIP_MODELS } from './ModelShips';
+import { Minimap } from './Minimap';
 import { FEEL } from './PlayerConfig';
 
 /** 基座 glTF 船模归一化后的船长（米），缩放真实模型船型时以此为基准。 */
@@ -56,6 +62,8 @@ export interface GameOptions {
   audio: AudioSystem;
   /** 25 船属性表（ships.json 映射完成；加载失败时各项为 FALLBACK_STATS）。 */
   shipStats: Record<number, ShipStats>;
+  /** 基座天气：大雨（rain 且有一定强度）时灭火、不新附着火、全船减速。 */
+  isRaining: () => boolean;
   heightAt: WaveHeightAt;
 }
 
@@ -66,17 +74,26 @@ export class Game {
   private readonly fleet: EnemyFleet;
   private readonly hud: GameHud;
   private readonly audio: AudioSystem;
+  private readonly minimap: Minimap;
   private supplies: Supplies | null = null;
   private readonly camera: THREE.PerspectiveCamera;
   private readonly heightAt: WaveHeightAt;
+  private readonly isRaining: () => boolean;
   private readonly abort = new AbortController();
 
   private readonly fanL: THREE.Mesh;
   private readonly fanR: THREE.Mesh;
   private readonly fanBow: THREE.Mesh;
 
-  /** 玩家程序化外观（选真实模型船型时为 null，帆面鼓动由基座 Ship 负责）。 */
-  private playerVisual: { group: THREE.Group; setSailAmount(amount: number): void } | null = null;
+  /** 玩家帆面外观回调（程序化/精致模型的鼓收帆；基座 glTF 时为 null）。 */
+  private playerSail: ((amount: number) => void) | null = null;
+  /** 挂在基座 ship.object 下的定制外观子节点（换模型时整体替换）。 */
+  private playerVisualNode: THREE.Object3D | null = null;
+  /** 精致模型异步换装防串号：快速切换时旧请求后到账不得覆盖新选择。 */
+  private visualToken = 0;
+
+  private touchThrottle = 0; // 触屏摇杆帆量（-1 ~ 1，0 = 不接管）
+  private touchRudder = 0; // 触屏摇杆转向（-1 ~ 1）
 
   private state: 'playing' | 'over' = 'playing';
   private kills = 0;
@@ -92,6 +109,7 @@ export class Game {
   private gameOverT = 0;
   private gameOverShown = false;
   private time = 0;
+  private mmFrame = 0;
 
   private readonly keys = new Set<string>();
   private readonly collisionCooldowns = new Map<string, number>();
@@ -101,43 +119,31 @@ export class Game {
     this.camera = options.camera;
     this.heightAt = options.heightAt;
     this.audio = options.audio;
+    this.isRaining = options.isRaining;
     this.playerBase = options.player;
 
     // 游戏接管主船：基座的力模型控制器保持停用，浮力由 GameShip 自己采样。
     options.controls.setEnabled(false);
     options.controls.setKeyboardEnabled(false);
 
-    // ---- 所选船型：属性（ships.json 映射） + 外观 ----
+    // ---- 所选船型：属性（ships.json 映射） + 外观（含精致模型/染色/船首像） ----
     const def = getShipDef(resolveShipId());
     const stats = options.shipStats[def.id];
-    const lengthScale = def.spec.length / BASE_LENGTH;
     this.player = new GameShip(options.player.object, {
       maxHp: stats.hp,
       maxSpeed: stats.maxSpeed,
       turnRate: stats.turnRate,
       cannons: stats.cannons,
-      lengthScale,
+      lengthScale: def.spec.length / BASE_LENGTH,
     });
-    if (def.model) {
-      // 有真实模型的船型：B2 先用基座 glTF 按船长缩放（精致模型 B3 进 public 管线）
-      this.playerBase.setModelVisible(true);
-      this.playerBase.setModelScale(def.spec.length / BASE_MODEL_LENGTH);
-      this.player.baseY = 0; // glTF 模型设计水线即在 y=0
-    } else {
-      // 程序化船型：+Z 船头，转到容器的 +X 约定下；基座 glTF 隐藏
-      this.playerBase.setModelVisible(false);
-      const visual = buildShip(def.spec);
-      visual.group.rotation.y = Math.PI / 2;
-      this.playerBase.object.add(visual.group);
-      this.playerVisual = visual;
-      this.player.baseY = 0.55 * lengthScale;
-    }
+    this.applyPlayerVisual(def, resolveCustomization(), options.assets);
     this.player.revive();
 
     this.combat = new Combat(options.scene, this.heightAt);
     this.combat.onSplash = () => this.audio.playSplash(0.7);
     this.fleet = new EnemyFleet(options.scene, this.combat);
     this.hud = new GameHud(options.uiRoot);
+    this.minimap = new Minimap(options.uiRoot);
 
     this.fanL = makeFanViz(options.scene);
     this.fanR = makeFanViz(options.scene);
@@ -167,6 +173,106 @@ export class Game {
     return this.player.speed;
   }
 
+  /**
+   * 玩家外观解析：精致模型（勾选且有货）→ 基座 glTF 缩放（有货未勾选）→ 程序化。
+   * 三条路径都把外观作为 +Z 船头的子节点挂进基座 ship.object（yaw +π/2 对齐
+   * +X 约定），染色与船首像在子节点上统一处理。
+   */
+  private applyPlayerVisual(
+    def: ShipDef,
+    custom: ShipCustomization,
+    assets: AssetLoader,
+  ): void {
+    const token = ++this.visualToken;
+    // 定制染色存的是 '#rrggbb' 字符串，材质与实例化都要数值
+    const parseHex = (v: string | null): number | undefined =>
+      v === null ? undefined : Number.parseInt(v.slice(1), 16);
+    const tint = {
+      hull: parseHex(custom.hullColor),
+      sail: parseHex(custom.sailColor),
+    };
+    const hasTint = tint.hull !== undefined || tint.sail !== undefined;
+
+    const mount = (
+      node: THREE.Object3D,
+      sailSetter: ((amount: number) => void) | null,
+      lengthScale: number,
+      baseY: number,
+    ): void => {
+      if (token !== this.visualToken) return; // 后到的旧请求丢弃
+      if (this.playerVisualNode) {
+        this.playerBase.object.remove(this.playerVisualNode);
+        this.playerVisualNode = null;
+      }
+      // +Z 船头 → 容器 +X 约定
+      node.rotation.y = Math.PI / 2;
+      this.playerBase.object.add(node);
+      this.playerVisualNode = node;
+      this.playerSail = sailSetter;
+      this.player.lengthScale = lengthScale;
+      this.player.hitRadius = 3.4 * lengthScale;
+      this.player.baseY = baseY;
+
+      // 船首像：挂船头 +Z 端水线上方，按船长比例
+      if (custom.figurehead !== 'none') {
+        const fh = buildFigurehead(custom.figurehead);
+        fh.scale.setScalar(lengthScale);
+        fh.position.set(0, 1.05 * lengthScale, lengthScale * BASE_LENGTH * 0.46);
+        node.add(fh);
+      }
+      this.playerSail?.(Math.max(0, this.sailAmount));
+    };
+
+    if (custom.fancy && def.model) {
+      // 精致模型：先程序化占位（模型按需异步加载），到了再换装；
+      // 物理尺度按模型目标船长（旧版同规则）
+      this.mountProcedural(def, custom, mount);
+      void loadShipModel(assets, def.model).then((template) => {
+        if (!template || token !== this.visualToken) return; // 失败留用程序化
+        this.playerBase.setModelVisible(false);
+        const inst = instantiateShip(template, hasTint ? tint : null);
+        const targetLength = SHIP_MODELS[def.model!]?.targetLength ?? def.spec.length;
+        mount(inst.group, inst.setSailAmount, targetLength / BASE_LENGTH, 0);
+      });
+      return;
+    }
+    this.mountProcedural(def, custom, mount);
+  }
+
+  /** 非精致路径：有真实模型的船型用基座 glTF 缩放，否则程序化生成。 */
+  private mountProcedural(
+    def: ShipDef,
+    custom: ShipCustomization,
+    mount: (
+      node: THREE.Object3D,
+      sailSetter: ((amount: number) => void) | null,
+      lengthScale: number,
+      baseY: number,
+    ) => void,
+  ): void {
+    if (def.model) {
+      // 基座 glTF 按船长缩放；染色对 glTF 不适用（贴图船），船首像照挂
+      this.playerBase.setModelVisible(true);
+      this.playerBase.setModelScale(def.spec.length / BASE_MODEL_LENGTH);
+      const holder = new THREE.Group(); // 船首像的 +Z 挂载层
+      mount(holder, null, def.spec.length / BASE_LENGTH, 0);
+      return;
+    }
+    this.playerBase.setModelVisible(false);
+    const parseHex = (v: string | null): number | null =>
+      v === null ? null : Number.parseInt(v.slice(1), 16);
+    const visual = buildShip(def.spec, {
+      sailColor: parseHex(custom.sailColor),
+      hullColor: parseHex(custom.hullColor),
+    });
+    mount(
+      visual.group,
+      (a) => visual.setSailAmount(a),
+      def.spec.length / BASE_LENGTH,
+      0.55 * (def.spec.length / BASE_LENGTH),
+    );
+  }
+
   /** 出航：初始 60% 帆，两艘敌船。 */
   private begin(): void {
     this.setSail(0.6);
@@ -193,6 +299,10 @@ export class Game {
   update(dt: number): void {
     this.time += dt;
     const player = this.player;
+    // 大雨：灭火 + 不新附着火（onHit 的 skipFire）+ 全船减速
+    const raining = this.isRaining();
+    const weatherSpeedMul = raining ? 0.9 : 1;
+    this.fleet.weatherSpeedMul = weatherSpeedMul;
 
     // 任意死因（炮火/撞击/着火）都进 Game Over
     if (this.state === 'playing' && player.sinking) {
@@ -218,18 +328,26 @@ export class Game {
       } else {
         this.asternHoldT = 0;
       }
+      // 触屏摇杆：纵轴直接映射帆量（下推到底进倒车）
+      if (this.touchThrottle !== 0) {
+        this.setSail(
+          this.touchThrottle >= 0 ? this.touchThrottle : this.touchThrottle * FEEL.ASTERN_MAX,
+        );
+      }
 
-      const targetSpeed = this.sailAmount * player.maxSpeed * player.speedMul; // debuff 乘区
+      const targetSpeed = this.sailAmount * player.maxSpeed * player.speedMul * weatherSpeedMul;
       player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
       let turn = 0;
       if (this.keys.has('KeyA')) turn += 1; // A = 左转
       if (this.keys.has('KeyD')) turn -= 1;
+      turn -= this.touchRudder; // 摇杆右推 = 右转
       // 舵是翼面：舵效 ∝ 航速（低速几乎转不动），倒车时舵效反向
       const speedRatio = Math.min(1, Math.abs(player.speed) / player.maxSpeed);
       const rudderEff =
         FEEL.RUDDER_MIN_EFF + (1 - FEEL.RUDDER_MIN_EFF) * Math.pow(speedRatio, FEEL.RUDDER_CURVE);
       const rudderDir = player.speed < -0.3 ? -1 : 1;
-      player.heading += turn * player.turnRate * rudderEff * rudderDir * dt;
+      const weatherTurnMul = raining ? 0.85 : 1; // 雨天操控略钝
+      player.heading += turn * player.turnRate * rudderEff * rudderDir * weatherTurnMul * dt;
     }
 
     // ---- 蓄力进度推进 + 扇面预览 ----
@@ -287,9 +405,13 @@ export class Game {
       }
     }
 
-    // ---- debuff 粒子：着火冒火焰、漏水舷侧冒水花 ----
+    // ---- debuff 粒子：着火冒火焰、漏水舷侧冒水花；大雨浇灭所有着火 ----
     for (const s of [player, ...this.fleet.enemies]) {
       if (s.sinking || s.dead) continue;
+      if (raining && s.debuff.fire > 0) {
+        s.debuff.fire = 0;
+        if (s === player) this.hud.floatText('大雨浇灭了火焰');
+      }
       if (s.debuff.fire > 0 && Math.random() < dt * 10) {
         const pos = s.position.clone();
         pos.x += (Math.random() - 0.5) * 2;
@@ -326,11 +448,27 @@ export class Game {
       this.loot,
     );
     this.hud.updateEnemyHpBars(dt, this.fleet.enemies, this.camera);
+    if ((this.mmFrame++ & 3) === 0) {
+      this.minimap.draw(player, this.fleet.enemies, this.supplies); // 小地图 ~15fps 节流
+    }
+  }
+
+  /** 触屏摇杆输入（throttle/rudder 各 -1..1；0 = 松开不接管）。 */
+  setTouchInput(throttle: number, rudder: number): void {
+    this.touchThrottle = THREE.MathUtils.clamp(throttle, -1, 1);
+    this.touchRudder = THREE.MathUtils.clamp(rudder, -1, 1);
+  }
+
+  /** 触屏开炮按钮：按住蓄力、松开发射，与 Q/E 同路径。 */
+  touchFire(side: 'L' | 'R', down: boolean): void {
+    if (down) this.startCharge(side);
+    else this.releaseCharge(side);
   }
 
   dispose(): void {
     this.abort.abort();
     this.hud.dispose();
+    this.minimap.dispose();
   }
 
   // ------------------------------------------------------------------ 输入
@@ -385,7 +523,7 @@ export class Game {
   private setSail(v: number): void {
     this.sailAmount = THREE.MathUtils.clamp(v, -FEEL.ASTERN_MAX, this.player.sailCap);
     // 倒车时帆面按收帆显示
-    this.playerVisual?.setSailAmount(Math.max(0, this.sailAmount));
+    this.playerSail?.(Math.max(0, this.sailAmount));
   }
 
   /** 按住蓄力、松开发射；冷却未结束时按住不开始蓄力。 */
@@ -453,8 +591,8 @@ export class Game {
       });
     }
     if (!sunk) {
-      // TODO(B3 天气)：大雨中（weather.fireOut）不附加着火
-      for (const key of target.ship.rollDebuffs(false)) {
+      // 大雨天不新附着火
+      for (const key of target.ship.rollDebuffs(this.isRaining())) {
         // 敌船中 debuff：头上飘字；玩家中 debuff：HUD 图标表达（hud.update）
         if (!target.isPlayer) {
           this.hud.floatTextAt(`敌船${DEBUFF_DEFS[key].label}！`, target.ship.position, this.camera);

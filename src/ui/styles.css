@@ -1703,3 +1703,87 @@ body {
   margin-top: 6px;
   font-size: 11px;
 }
+
+/* --------------------------------------------------------------------------
+   Minimap / touch fire / 定制行（阶段 B3）
+   -------------------------------------------------------------------------- */
+
+.ghud__minimap {
+  position: absolute;
+  /* 让开右侧设置面板（--panel-width） */
+  right: calc(var(--gutter) + var(--panel-width) + 16px);
+  bottom: var(--gutter);
+  width: 150px;
+  height: 150px;
+  border: 1px solid var(--rule);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.ghud__minimap.is-large {
+  width: 280px;
+  height: 280px;
+}
+
+.shipselect__custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--bone-dim);
+}
+
+.shipselect__custom label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.shipselect__custom input[type='color'] {
+  width: 34px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid var(--rule);
+  background: var(--ink-deep);
+  cursor: pointer;
+}
+
+.shipselect__custom select {
+  background: var(--ink-deep);
+  color: var(--bone);
+  border: 1px solid var(--rule);
+  font-family: var(--font-instrument);
+  font-size: 12px;
+  padding: 2px 4px;
+}
+
+.touchfire {
+  position: fixed;
+  right: var(--gutter);
+  bottom: calc(var(--gutter) + 170px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 40;
+}
+
+.touchfire__btn {
+  width: 76px;
+  height: 56px;
+  background: var(--ink);
+  color: var(--bone);
+  border: 1px solid var(--rule);
+  border-top: 3px double var(--red);
+  font-family: var(--font-instrument);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  touch-action: none;
+}
+
+.touchfire__btn:active {
+  background: var(--ink-deep);
+  color: var(--red);
+}

@@ -31,6 +31,12 @@ const DEAD_ZONE = 0.12;
 export interface TouchControlsCallbacks {
   /** Throttle and rudder, each -1..1. Called only when a value changes. */
   onInput(throttle: number, rudder: number): void;
+  /**
+   * Broadside fire buttons, if provided: PORT/STARBOARD show next to the pad.
+   * down = press-and-hold to charge, up = release to fire — the same contract
+   * as the keyboard's Q/E.
+   */
+  onFire?(side: 'L' | 'R', down: boolean): void;
 }
 
 export class TouchControls {
@@ -45,6 +51,8 @@ export class TouchControls {
   private rudder = 0;
   private visible = false;
   private disposed = false;
+  /** Fire buttons; null when the callbacks do not provide onFire. */
+  private readonly fireBar: HTMLElement | null = null;
 
   constructor(root: HTMLElement, callbacks: TouchControlsCallbacks) {
     this.root = root;
@@ -84,6 +92,44 @@ export class TouchControls {
     this.pad = pad;
     this.knob = knob;
     this.root.append(pad);
+
+    // 舷炮按钮：按住蓄力、松开发射（与键盘 Q/E 同一契约）。
+    // 每只按钮独立捕获指针，双舷可同时蓄力。
+    if (callbacks.onFire) {
+      const onFire = callbacks.onFire;
+      const bar = document.createElement('div');
+      bar.className = 'touchfire';
+      bar.hidden = true;
+      for (const [side, label] of [
+        ['L', 'PORT'],
+        ['R', 'STBD'],
+      ] as const) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'touchfire__btn';
+        button.textContent = label;
+        button.setAttribute('aria-label', side === 'L' ? 'Port broadside' : 'Starboard broadside');
+        button.addEventListener(
+          'pointerdown',
+          (e) => {
+            e.preventDefault();
+            button.setPointerCapture(e.pointerId);
+            onFire(side, true);
+          },
+          { signal },
+        );
+        const up = (e: PointerEvent): void => {
+          if (button.hasPointerCapture(e.pointerId)) button.releasePointerCapture(e.pointerId);
+          onFire(side, false);
+        };
+        button.addEventListener('pointerup', up, { signal });
+        button.addEventListener('pointercancel', up, { signal });
+        button.addEventListener('contextmenu', (e) => e.preventDefault(), { signal });
+        bar.append(button);
+      }
+      this.fireBar = bar;
+      this.root.append(bar);
+    }
   }
 
   /**
@@ -105,6 +151,7 @@ export class TouchControls {
     if (this.disposed || this.visible === visible) return;
     this.visible = visible;
     this.pad.hidden = !visible;
+    if (this.fireBar) this.fireBar.hidden = !visible;
     if (!visible) this.release();
   }
 
@@ -117,6 +164,7 @@ export class TouchControls {
     this.disposed = true;
     this.controller.abort();
     this.pad.remove();
+    this.fireBar?.remove();
   }
 
   // ---------------------------------------------------------------- internals

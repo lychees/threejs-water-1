@@ -11,9 +11,12 @@ import { assetUrl } from '../core/paths';
 import {
   SHIP_DEFS,
   FALLBACK_STATS,
+  FIGUREHEADS,
   loadShipStats,
   resolveShipId,
   storeShipId,
+  resolveCustomization,
+  storeCustomizationKey,
   type ShipStats,
 } from './Shipyard';
 
@@ -108,5 +111,56 @@ export function buildShipSelect(): HTMLElement {
   paint(Object.fromEntries(SHIP_DEFS.map((d) => [d.id, FALLBACK_STATS])));
   void loadShipStats(assetUrl('/data/ships.json')).then(paint);
 
+  section.append(buildCustomizeRow());
   return section;
+}
+
+/** 定制行：精致模型勾选 + 帆色/船体色 + 船首像。写入 localStorage，Game 启动时读。 */
+function buildCustomizeRow(): HTMLElement {
+  const custom = resolveCustomization();
+  const row = document.createElement('div');
+  row.className = 'shipselect__custom';
+
+  // 精致模型勾选（默认关：模型按需加载，老机器省 40MB 下载与显存）
+  const fancyLabel = document.createElement('label');
+  fancyLabel.className = 'shipselect__fancy';
+  const fancyChk = document.createElement('input');
+  fancyChk.type = 'checkbox';
+  fancyChk.checked = custom.fancy;
+  fancyChk.addEventListener('change', () => {
+    storeCustomizationKey('fancy', fancyChk.checked ? '1' : '0');
+  });
+  fancyLabel.append(fancyChk, document.createTextNode('精致模型（6 艘可用）'));
+
+  const mkColor = (labelText: string, key: 'sailColor' | 'hullColor', initial: string): HTMLElement => {
+    const label = document.createElement('label');
+    label.className = 'shipselect__color';
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = initial;
+    input.addEventListener('input', () => storeCustomizationKey(key, input.value));
+    label.append(document.createTextNode(labelText), input);
+    return label;
+  };
+
+  const fhLabel = document.createElement('label');
+  fhLabel.className = 'shipselect__fh';
+  const fhSelect = document.createElement('select');
+  for (const f of FIGUREHEADS) {
+    const opt = document.createElement('option');
+    opt.value = f.id;
+    opt.textContent = f.cn;
+    fhSelect.append(opt);
+  }
+  fhSelect.value = custom.figurehead;
+  fhSelect.addEventListener('change', () => storeCustomizationKey('figurehead', fhSelect.value));
+  fhLabel.append(document.createTextNode('船首像 '), fhSelect);
+
+  row.append(
+    fancyLabel,
+    mkColor('帆色', 'sailColor', custom.sailColor ?? '#f3ead5'),
+    mkColor('船体色', 'hullColor', custom.hullColor ?? '#7a4f2a'),
+    fhLabel,
+  );
+  return row;
 }

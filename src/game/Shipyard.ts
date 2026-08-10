@@ -417,3 +417,132 @@ export async function loadShipStats(url: string): Promise<Record<number, ShipSta
   }
   return out;
 }
+
+// ================= 船首像（低模 <200 三角面，共享材质缓存；朝 +Z 船头方向） =================
+// 移植自旧 js/shipyard.js；精致雕像模型（狮首/马首/青铜系）不在本阶段范围。
+
+export const FIGUREHEADS = [
+  { id: 'none', cn: '无' },
+  { id: 'dragon', cn: '海龙' },
+  { id: 'skull', cn: '骷髅' },
+  { id: 'dolphin', cn: '海豚' },
+] as const;
+
+export type FigureheadId = (typeof FIGUREHEADS)[number]['id'];
+
+export function buildFigurehead(kind: FigureheadId): THREE.Group {
+  const g = new THREE.Group();
+
+  if (kind === 'dragon') {
+    const body = hullMat(0x2e8f7a);
+    const fin = hullMat(0xd4b04a);
+    // 三段渐弯的颈（逐节前倾）
+    const segs = [
+      { y: 0.15, z: 0.0, r: 0.5, len: 0.45, r1: 0.12, r2: 0.1 },
+      { y: 0.42, z: 0.18, r: 0.9, len: 0.42, r1: 0.1, r2: 0.08 },
+      { y: 0.62, z: 0.42, r: 1.2, len: 0.38, r1: 0.08, r2: 0.06 },
+    ];
+    for (const s of segs) {
+      const seg = new THREE.Mesh(new THREE.CylinderGeometry(s.r2, s.r1, s.len, 6), body);
+      seg.position.set(0, s.y, s.z);
+      seg.rotation.x = s.r;
+      g.add(seg);
+    }
+    // 头锥 + 两侧鳍
+    const head = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.42, 6), body);
+    head.rotation.x = Math.PI / 2;
+    head.position.set(0, 0.68, 0.66);
+    g.add(head);
+    for (const side of [-1, 1]) {
+      const f = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.3, 4), fin);
+      f.position.set(side * 0.14, 0.55, 0.35);
+      f.rotation.z = -side * 1.2;
+      g.add(f);
+    }
+  } else if (kind === 'skull') {
+    const bone = hullMat(0xe8e2d4);
+    const dark = hullMat(0x1a1a1a);
+    const cranium = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), bone);
+    cranium.position.y = 0.35;
+    g.add(cranium);
+    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.12, 0.22), bone);
+    jaw.position.set(0, 0.14, 0.06);
+    g.add(jaw);
+    for (const side of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.05, 6, 5), dark);
+      eye.position.set(side * 0.09, 0.38, 0.17);
+      g.add(eye);
+    }
+  } else if (kind === 'dolphin') {
+    const skin = hullMat(0x5a8fb5);
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), skin);
+    body.scale.set(0.55, 0.5, 1.6); // 纺锤体
+    body.position.y = 0.25;
+    g.add(body);
+    const rostrum = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.06, 0.35, 6), skin);
+    rostrum.rotation.x = Math.PI / 2;
+    rostrum.position.set(0, 0.22, 0.58);
+    g.add(rostrum);
+    const dorsal = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.25, 4), skin);
+    dorsal.position.set(0, 0.52, -0.05);
+    dorsal.rotation.x = -0.3;
+    g.add(dorsal);
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 4), skin);
+    tail.rotation.x = -Math.PI / 2;
+    tail.position.set(0, 0.28, -0.55);
+    g.add(tail);
+  }
+  return g;
+}
+
+// ================= 外观定制状态（localStorage） =================
+
+export interface ShipCustomization {
+  /** 使用精致模型（有真实模型的 6 艘生效）。 */
+  fancy: boolean;
+  /** 帆色/船体色（'#rrggbb'；null = 原色）。 */
+  sailColor: string | null;
+  hullColor: string | null;
+  figurehead: FigureheadId;
+}
+
+const KEY_FANCY = 'web-ocean:fancy-model:v1';
+const KEY_SAIL_COLOR = 'web-ocean:sail-color:v1';
+const KEY_HULL_COLOR = 'web-ocean:hull-color:v1';
+const KEY_FIGUREHEAD = 'web-ocean:figurehead:v1';
+
+export const DEFAULT_CUSTOMIZATION: ShipCustomization = {
+  fancy: false,
+  sailColor: null,
+  hullColor: null,
+  figurehead: 'none',
+};
+
+function readStorage(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+export function storeCustomizationKey(key: 'fancy' | 'sailColor' | 'hullColor' | 'figurehead', value: string): void {
+  const storageKey = { fancy: KEY_FANCY, sailColor: KEY_SAIL_COLOR, hullColor: KEY_HULL_COLOR, figurehead: KEY_FIGUREHEAD }[key];
+  try {
+    window.localStorage.setItem(storageKey, value);
+  } catch {
+    // localStorage 不可用时定制只剩当次会话
+  }
+}
+
+export function resolveCustomization(): ShipCustomization {
+  const figurehead = readStorage(KEY_FIGUREHEAD);
+  return {
+    fancy: readStorage(KEY_FANCY) === '1',
+    sailColor: readStorage(KEY_SAIL_COLOR),
+    hullColor: readStorage(KEY_HULL_COLOR),
+    figurehead: FIGUREHEADS.some((f) => f.id === figurehead)
+      ? (figurehead as FigureheadId)
+      : 'none',
+  };
+}

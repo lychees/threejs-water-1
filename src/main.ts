@@ -64,26 +64,6 @@ import { openStartGate, type StartSelection } from './ui/StartGate';
 import { Game } from './game/Game';
 import { loadShipStats } from './game/Shipyard';
 import { assetUrl } from './core/paths';
-import { inject } from '@vercel/analytics';
-
-// Vercel Web Analytics, and only where Vercel is actually serving it.
-//
-// `inject()` adds a script tag pointing at `/_vercel/insights/script.js`, which
-// exists only on a Vercel deployment. Everywhere else — `vite preview`, the
-// Playwright suite, the benchmark harness, anyone self-hosting the build — it
-// is a guaranteed 404 in the console of every session.
-//
-// That is not merely untidy. The suite asserts that a boot produces no console
-// errors, which is how it catches a missing asset or a failed shader, and a
-// permanent 404 makes a real failure indistinguishable from the background
-// noise. Six tests failed on it.
-// Excluded by environment rather than allow-listed by domain: the deployment
-// may well be on a custom domain, and an allow-list would quietly turn
-// analytics off there, which is the failure nobody notices.
-const localHost = /^(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)$/.test(window.location.hostname);
-if (!localHost && !navigator.webdriver) {
-  inject();
-}
 
 /** Scratch for the test-hook camera pin; the hook must not allocate either. */
 const _pinPosition = new THREE.Vector3();
@@ -1251,6 +1231,8 @@ class App {
         controls: this.shipControls,
         audio: this.audio,
         shipStats,
+        isRaining: () =>
+          this.weather.getKind() === 'rain' && this.weather.getIntensity() > 0.05,
         heightAt: (x, z) => this.sampler.height(x, z),
       });
 
@@ -1383,7 +1365,12 @@ class App {
     // viewer to discover by accident.
     if (TouchControls.isTouchDevice()) {
       this.touchControls = new TouchControls(this.uiRoot, {
-        onInput: (throttle, rudder) => this.shipControls?.setInput(throttle, rudder),
+        // 游戏接管期间走 Game 的街机模型；否则回退基座控制器。
+        onInput: (throttle, rudder) => {
+          if (this.game) this.game.setTouchInput(throttle, rudder);
+          else this.shipControls?.setInput(throttle, rudder);
+        },
+        onFire: (side, down) => this.game?.touchFire(side, down),
       });
       this.touchControls.setVisible(this.state.cameraMode === 'boat');
     }
