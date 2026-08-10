@@ -526,6 +526,35 @@ const HIT_BANDPASS_HZ = 350;
 const HIT_TONE_HZ = 120;
 const PICKUP_LEVEL = 0.3;
 
+/**
+ * 音效增强配方（全部程序化合成，无音频文件）。每个 one-shot 的频率/电平
+ * 都带 ±10% 以内的随机抖动（oneShotRandom），连发不像机关枪复读。
+ */
+/** 炮声：脆响层高通截止。 */
+const CANNON_CRACK_HZ = 1800;
+const CANNON_CRACK_SECONDS = 0.07;
+/** 炮声：混响尾的渐弱噪声（低通 + 长衰减）。 */
+const CANNON_TAIL_HZ = 160;
+const CANNON_TAIL_SECONDS = 0.9;
+const CANNON_SUB_HZ = 38;
+/** 装填就绪提示（uiBus）：C6 轻叮 + 高五度泛音。 */
+const READY_HZ = 1046;
+const READY_HARMONIC_HZ = 1568;
+const READY_LEVEL = 0.12;
+/** 着火噼啪：循环期间按随机间隔撒微噪声簇。 */
+const CRACKLE_INTERVAL_MIN = 0.05;
+const CRACKLE_INTERVAL_SPAN = 0.11;
+const CRACKLE_LEVEL = 0.1;
+/** 船体嘎吱：带通噪声下扫。 */
+const CREAK_LEVEL = 0.09;
+/** 满帆兜风"呼"声。 */
+const SAIL_GUST_LEVEL = 0.16;
+/** 船碰船：比炮击更沉、更长，无脆响层。 */
+const COLLISION_LOWPASS_HZ = 150;
+const COLLISION_BOOM_HZ = 45;
+const COLLISION_SECONDS = 0.55;
+const COLLISION_LEVEL = 0.9;
+
 // --- gulls -----------------------------------------------------------------
 //
 // The hardest thing in this file to keep on the right side of the line between a
@@ -970,6 +999,9 @@ export class AudioSystem {
     const step = clampNumber(finite(dt, 0), 0, 0.1);
     this.clock = (this.clock + step) % CLOCK_WRAP;
 
+    // 着火噼啪（Game 每帧用 setFireBurning 置位）
+    this.updateFireCrackle(step);
+
     const now = ctx.currentTime;
 
     // Deferred work first: it has to run even when nothing else does, or a
@@ -1298,6 +1330,22 @@ export class AudioSystem {
         BUBBLE_LEVEL * (0.4 + 0.6 * amount),
       );
     }
+
+    // 低频"咕噜"： cavities collapsing under the surface，大水花才听得见。
+    if (amount >= 0.25 && this.acquireVoice()) {
+      const glug = ctx.createOscillator();
+      glug.type = 'sine';
+      const f0 = (150 + 60 * random()) * (0.6 + 0.4 * amount);
+      glug.frequency.setValueAtTime(f0, now + 0.05);
+      glug.frequency.exponentialRampToValueAtTime(f0 * 0.45, now + 0.05 + 0.16 * amount + 0.08);
+      const glugGain = ctx.createGain();
+      envelope(glugGain.gain, now + 0.05, 0.008, level * 0.5 * amount, 0.14 + 0.12 * amount);
+      glug.connect(glugGain);
+      glugGain.connect(this.airBus);
+      glug.start(now + 0.05);
+      glug.stop(now + 0.4 + 0.12 * amount);
+      this.trackVoice(glug, glugGain);
+    }
   }
 
   /**
@@ -1449,9 +1497,12 @@ export class AudioSystem {
   }
 
   /**
-   * Broadside/bow gun report. A world sound (airBus), so it muffles underwater
-   * like thunder does. Voicing from the legacy game's cannon(): a low-passed
-   * noise burst for the muzzle blast over a 55 Hz boom.
+   * Broadside/bow gun report, layered: a high crack for the muzzle snap, a
+   * low-passed blast for the powder body, a 55 Hz boom and a 38 Hz sub for the
+   * chest hit, and a long low noise tail standing in for the harbour reverb.
+   * Every layer jitters pitch/level a few percent so a full broadside does not
+   * sound like one shot sampled five times. World sound (airBus): muffles
+   * underwater like thunder does.
    */
   playCannon(): void {
     const ctx = this.ctx;
@@ -1460,14 +1511,32 @@ export class AudioSystem {
 
     const random = this.oneShotRandom;
     const now = ctx.currentTime;
+    const jitter = (base: number, span: number): number => base * (1 - span + 2 * span * random());
 
+    // 脆响层：高通短噪声簇
+    const crack = ctx.createBufferSource();
+    crack.buffer = this.white;
+    crack.loop = true;
+    crack.playbackRate.value = 1.4 + 0.4 * random();
+    const crackHp = ctx.createBiquadFilter();
+    crackHp.type = 'highpass';
+    crackHp.frequency.value = jitter(CANNON_CRACK_HZ, 0.1);
+    const crackGain = ctx.createGain();
+    envelope(crackGain.gain, now, 0.002, CANNON_LEVEL * (0.4 + 0.15 * random()), CANNON_CRACK_SECONDS);
+    crack.connect(crackHp);
+    crackHp.connect(crackGain);
+    crackGain.connect(this.airBus);
+    crack.start(now, random() * this.white.duration);
+    crack.stop(now + CANNON_CRACK_SECONDS + 0.05);
+
+    //  powder 主体：低通噪声爆破
     const blast = ctx.createBufferSource();
     blast.buffer = this.white;
     blast.loop = true;
     blast.playbackRate.value = 0.6 + 0.2 * random();
     const lowpass = ctx.createBiquadFilter();
     lowpass.type = 'lowpass';
-    lowpass.frequency.value = CANNON_LOWPASS_HZ;
+    lowpass.frequency.value = jitter(CANNON_LOWPASS_HZ, 0.08);
     const blastGain = ctx.createGain();
     envelope(blastGain.gain, now, 0.004, CANNON_LEVEL, CANNON_SECONDS);
     blast.connect(lowpass);
@@ -1476,9 +1545,10 @@ export class AudioSystem {
     blast.start(now, random() * this.white.duration);
     blast.stop(now + CANNON_SECONDS + 0.05);
 
+    // 轰鸣 + 胸腔次低频
     const boom = ctx.createOscillator();
     boom.type = 'sine';
-    boom.frequency.value = CANNON_BOOM_HZ;
+    boom.frequency.value = jitter(CANNON_BOOM_HZ, 0.06);
     const boomGain = ctx.createGain();
     envelope(boomGain.gain, now, 0.006, CANNON_LEVEL * 0.65, CANNON_SECONDS);
     boom.connect(boomGain);
@@ -1486,10 +1556,36 @@ export class AudioSystem {
     boom.start(now);
     boom.stop(now + CANNON_SECONDS + 0.05);
 
-    this.trackVoice(blast, lowpass, blastGain, boom, boomGain);
+    const sub = ctx.createOscillator();
+    sub.type = 'sine';
+    sub.frequency.value = jitter(CANNON_SUB_HZ, 0.06);
+    const subGain = ctx.createGain();
+    envelope(subGain.gain, now, 0.01, CANNON_LEVEL * 0.5, CANNON_SECONDS * 1.5);
+    sub.connect(subGain);
+    subGain.connect(this.airBus);
+    sub.start(now);
+    sub.stop(now + CANNON_SECONDS * 1.5 + 0.05);
+
+    // 混响尾：低通长渐弱噪声
+    const tail = ctx.createBufferSource();
+    tail.buffer = this.white;
+    tail.loop = true;
+    tail.playbackRate.value = 0.4 + 0.15 * random();
+    const tailLp = ctx.createBiquadFilter();
+    tailLp.type = 'lowpass';
+    tailLp.frequency.value = jitter(CANNON_TAIL_HZ, 0.1);
+    const tailGain = ctx.createGain();
+    envelope(tailGain.gain, now + 0.03, 0.05, CANNON_LEVEL * 0.28, CANNON_TAIL_SECONDS);
+    tail.connect(tailLp);
+    tailLp.connect(tailGain);
+    tailGain.connect(this.airBus);
+    tail.start(now + 0.03, random() * this.white.duration);
+    tail.stop(now + CANNON_TAIL_SECONDS + 0.1);
+
+    this.trackVoice(blast, lowpass, blastGain, boom, boomGain, sub, subGain, tail, tailLp, tailGain, crack, crackHp, crackGain);
   }
 
-  /** A ball finding a hull: band-passed knock over a low triangle thud. */
+  /** A ball finding a hull: 木屑碎裂——三簇错开数毫秒的带通敲击 + 低频钝击。 */
   playHit(): void {
     const ctx = this.ctx;
     if (ctx === null || !this.canPlay()) return;
@@ -1498,33 +1594,41 @@ export class AudioSystem {
     const random = this.oneShotRandom;
     const now = ctx.currentTime;
 
-    const knock = ctx.createBufferSource();
-    knock.buffer = this.white;
-    knock.loop = true;
-    knock.playbackRate.value = 0.9 + 0.2 * random();
-    const band = ctx.createBiquadFilter();
-    band.type = 'bandpass';
-    band.frequency.value = HIT_BANDPASS_HZ;
-    band.Q.value = 1.1;
-    const knockGain = ctx.createGain();
-    envelope(knockGain.gain, now, 0.003, HIT_LEVEL, HIT_SECONDS);
-    knock.connect(band);
-    band.connect(knockGain);
-    knockGain.connect(this.airBus);
-    knock.start(now, random() * this.white.duration);
-    knock.stop(now + HIT_SECONDS + 0.05);
+    // 碎裂层：三簇错开 6~14ms，频率逐簇升高、电平递减
+    const splinters: readonly (readonly [number, number, number])[] = [
+      [0, HIT_BANDPASS_HZ, 1],
+      [0.006, HIT_BANDPASS_HZ * 1.5, 0.6],
+      [0.014, HIT_BANDPASS_HZ * 2.1, 0.35],
+    ];
+    for (const [at, freq, scale] of splinters) {
+      const knock = ctx.createBufferSource();
+      knock.buffer = this.white;
+      knock.loop = true;
+      knock.playbackRate.value = 0.9 + 0.3 * random();
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.frequency.value = freq * (0.92 + 0.16 * random());
+      band.Q.value = 1.1;
+      const gain = ctx.createGain();
+      envelope(gain.gain, now + at, 0.002, HIT_LEVEL * scale, HIT_SECONDS * (0.6 + 0.4 * scale));
+      knock.connect(band);
+      band.connect(gain);
+      gain.connect(this.airBus);
+      knock.start(now + at, random() * this.white.duration);
+      knock.stop(now + at + HIT_SECONDS + 0.05);
+      this.trackVoice(knock, band, gain);
+    }
 
     const thud = ctx.createOscillator();
     thud.type = 'triangle';
-    thud.frequency.value = HIT_TONE_HZ;
+    thud.frequency.value = HIT_TONE_HZ * (0.94 + 0.12 * random());
     const thudGain = ctx.createGain();
     envelope(thudGain.gain, now, 0.004, HIT_LEVEL * 0.55, HIT_SECONDS * 0.7);
     thud.connect(thudGain);
     thudGain.connect(this.airBus);
     thud.start(now);
     thud.stop(now + HIT_SECONDS);
-
-    this.trackVoice(knock, band, knockGain, thud, thudGain);
+    this.trackVoice(thud, thudGain);
   }
 
   /** Pickup chime: two rising triangle notes. A UI sound — never muffled. */
@@ -1551,6 +1655,285 @@ export class AudioSystem {
     }
   }
 
+  /** 装填就绪：C6 轻叮 + 高五度泛音（uiBus，不闷化）。每舷独立触发，电平刻意压低。 */
+  playReady(): void {
+    const ctx = this.ctx;
+    if (ctx === null || !this.canPlay()) return;
+    if (!this.acquireVoice()) return;
+
+    const now = ctx.currentTime;
+    for (const [freq, at, dur, level] of [
+      [READY_HZ, 0, 0.09, READY_LEVEL],
+      [READY_HARMONIC_HZ, 0.055, 0.11, READY_LEVEL * 0.6],
+    ] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const gain = ctx.createGain();
+      envelope(gain.gain, now + at, 0.003, level, dur);
+      osc.connect(gain);
+      gain.connect(this.uiBus);
+      osc.start(now + at);
+      osc.stop(now + at + dur + 0.05);
+      this.trackVoice(osc, gain);
+    }
+  }
+
+  /** 船碰船：比炮击更沉更长——低通重击 + 45Hz 托底，没有脆响层。 */
+  playCollision(): void {
+    const ctx = this.ctx;
+    if (ctx === null || !this.canPlay()) return;
+    if (!this.acquireVoice()) return;
+
+    const random = this.oneShotRandom;
+    const now = ctx.currentTime;
+
+    const thump = ctx.createBufferSource();
+    thump.buffer = this.white;
+    thump.loop = true;
+    thump.playbackRate.value = 0.45 + 0.15 * random();
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = COLLISION_LOWPASS_HZ * (0.9 + 0.2 * random());
+    const thumpGain = ctx.createGain();
+    envelope(thumpGain.gain, now, 0.005, COLLISION_LEVEL, COLLISION_SECONDS);
+    thump.connect(lp);
+    lp.connect(thumpGain);
+    thumpGain.connect(this.airBus);
+    thump.start(now, random() * this.white.duration);
+    thump.stop(now + COLLISION_SECONDS + 0.05);
+
+    const boom = ctx.createOscillator();
+    boom.type = 'sine';
+    boom.frequency.value = COLLISION_BOOM_HZ * (0.94 + 0.12 * random());
+    const boomGain = ctx.createGain();
+    envelope(boomGain.gain, now, 0.008, COLLISION_LEVEL * 0.75, COLLISION_SECONDS * 1.2);
+    boom.connect(boomGain);
+    boomGain.connect(this.airBus);
+    boom.start(now);
+    boom.stop(now + COLLISION_SECONDS * 1.2 + 0.05);
+
+    this.trackVoice(thump, lp, thumpGain, boom, boomGain);
+  }
+
+  /** 沉船：木质断裂（两簇低带通碎裂）+ 入水扑通 + 低频托底。 */
+  playSink(): void {
+    const ctx = this.ctx;
+    if (ctx === null || !this.canPlay()) return;
+    if (!this.acquireVoice()) return;
+
+    const random = this.oneShotRandom;
+    const now = ctx.currentTime;
+
+    for (const [at, freq] of [
+      [0, 210],
+      [0.09, 150],
+    ] as const) {
+      const crunch = ctx.createBufferSource();
+      crunch.buffer = this.white;
+      crunch.loop = true;
+      crunch.playbackRate.value = 0.5 + 0.2 * random();
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.frequency.value = freq * (0.9 + 0.2 * random());
+      band.Q.value = 1.4;
+      const gain = ctx.createGain();
+      envelope(gain.gain, now + at, 0.006, HIT_LEVEL * 0.9, 0.42);
+      crunch.connect(band);
+      band.connect(gain);
+      gain.connect(this.airBus);
+      crunch.start(now + at, random() * this.white.duration);
+      crunch.stop(now + at + 0.5);
+      this.trackVoice(crunch, band, gain);
+    }
+
+    const boom = ctx.createOscillator();
+    boom.type = 'sine';
+    boom.frequency.value = 40;
+    const boomGain = ctx.createGain();
+    envelope(boomGain.gain, now + 0.12, 0.02, 0.55, 1.1);
+    boom.connect(boomGain);
+    boomGain.connect(this.airBus);
+    boom.start(now + 0.12);
+    boom.stop(now + 1.3);
+    this.trackVoice(boom, boomGain);
+
+    // 入水扑通（延迟到断裂之后）：低通噪声 + 低频下坠
+    const plunge = ctx.createBufferSource();
+    plunge.buffer = this.white;
+    plunge.loop = true;
+    plunge.playbackRate.value = 0.7;
+    const plungeLp = ctx.createBiquadFilter();
+    plungeLp.type = 'lowpass';
+    plungeLp.frequency.value = 900;
+    const plungeGain = ctx.createGain();
+    envelope(plungeGain.gain, now + 0.25, 0.01, 0.7, 0.5);
+    plunge.connect(plungeLp);
+    plungeLp.connect(plungeGain);
+    plungeGain.connect(this.airBus);
+    plunge.start(now + 0.25, random() * this.white.duration);
+    plunge.stop(now + 0.85);
+    this.trackVoice(plunge, plungeLp, plungeGain);
+
+    const drop = ctx.createOscillator();
+    drop.type = 'sine';
+    drop.frequency.setValueAtTime(160, now + 0.25);
+    drop.frequency.exponentialRampToValueAtTime(70, now + 0.55);
+    const dropGain = ctx.createGain();
+    envelope(dropGain.gain, now + 0.25, 0.01, 0.4, 0.3);
+    drop.connect(dropGain);
+    dropGain.connect(this.airBus);
+    drop.start(now + 0.25);
+    drop.stop(now + 0.6);
+    this.trackVoice(drop, dropGain);
+  }
+
+  /** 船体嘎吱：带通噪声下扫，低电平；航行中由 Game 按速度概率触发。 */
+  playCreak(): void {
+    const ctx = this.ctx;
+    if (ctx === null || !this.canPlay()) return;
+    if (!this.acquireVoice()) return;
+
+    const random = this.oneShotRandom;
+    const now = ctx.currentTime;
+    const dur = 0.18 + 0.18 * random();
+
+    const src = ctx.createBufferSource();
+    src.buffer = this.white;
+    src.loop = true;
+    src.playbackRate.value = 0.5 + 0.2 * random();
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 4;
+    const f0 = 420 + 160 * random();
+    band.frequency.setValueAtTime(f0, now);
+    band.frequency.exponentialRampToValueAtTime(f0 * 0.62, now + dur);
+    const gain = ctx.createGain();
+    envelope(gain.gain, now, 0.03, CREAK_LEVEL * (0.7 + 0.6 * random()), dur);
+    src.connect(band);
+    band.connect(gain);
+    gain.connect(this.airBus);
+    src.start(now, random() * this.white.duration);
+    src.stop(now + dur + 0.05);
+    this.trackVoice(src, band, gain);
+  }
+
+  /** 满帆兜风"呼"：带通噪声先扬后抑的一阵。 */
+  playSailGust(): void {
+    const ctx = this.ctx;
+    if (ctx === null || !this.canPlay()) return;
+    if (!this.acquireVoice()) return;
+
+    const random = this.oneShotRandom;
+    const now = ctx.currentTime;
+    const dur = 0.55 + 0.25 * random();
+
+    const src = ctx.createBufferSource();
+    src.buffer = this.white;
+    src.loop = true;
+    src.playbackRate.value = 0.8 + 0.3 * random();
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.Q.value = 0.8;
+    band.frequency.setValueAtTime(380, now);
+    band.frequency.exponentialRampToValueAtTime(860, now + dur * 0.45);
+    band.frequency.exponentialRampToValueAtTime(460, now + dur);
+    const gain = ctx.createGain();
+    envelope(gain.gain, now, dur * 0.4, SAIL_GUST_LEVEL, dur * 0.6);
+    src.connect(band);
+    band.connect(gain);
+    gain.connect(this.airBus);
+    src.start(now, random() * this.white.duration);
+    src.stop(now + dur + 0.05);
+    this.trackVoice(src, band, gain);
+  }
+
+  /** Game Over：两音下行（uiBus）。 */
+  playGameOver(): void {
+    const ctx = this.ctx;
+    if (ctx === null || !this.canPlay()) return;
+    if (!this.acquireVoice()) return;
+
+    const now = ctx.currentTime;
+    for (const [freq, at, dur] of [
+      [392, 0, 0.5],
+      [262, 0.4, 0.9],
+    ] as const) {
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      const gain = ctx.createGain();
+      envelope(gain.gain, now + at, 0.02, 0.22, dur);
+      osc.connect(gain);
+      gain.connect(this.uiBus);
+      osc.start(now + at);
+      osc.stop(now + at + dur + 0.05);
+      this.trackVoice(osc, gain);
+    }
+  }
+
+  /** R 重开：三音上行琶音（uiBus）。 */
+  playRestart(): void {
+    const ctx = this.ctx;
+    if (ctx === null || !this.canPlay()) return;
+    if (!this.acquireVoice()) return;
+
+    const now = ctx.currentTime;
+    [262, 392, 523].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      const gain = ctx.createGain();
+      envelope(gain.gain, now + i * 0.07, 0.006, 0.2, 0.22);
+      osc.connect(gain);
+      gain.connect(this.uiBus);
+      osc.start(now + i * 0.07);
+      osc.stop(now + i * 0.07 + 0.3);
+      this.trackVoice(osc, gain);
+    });
+  }
+
+  /**
+   * 着火噼啪的开关：有船烧着时由 Game 每帧置真。调度在 update() 里——
+   * 随机间隔撒微噪声簇，走语音上限管理，火灭即停。
+   */
+  setFireBurning(burning: boolean): void {
+    this.fireBurning = burning;
+  }
+
+  /** update() 每帧驱动：着火时按随机间隔撒噼啪微簇。 */
+  private updateFireCrackle(step: number): void {
+    if (!this.fireBurning || !this.canPlay()) return;
+    this.fireCrackleTimer -= step;
+    if (this.fireCrackleTimer > 0) return;
+    const random = this.oneShotRandom;
+    this.fireCrackleTimer = CRACKLE_INTERVAL_MIN + CRACKLE_INTERVAL_SPAN * random();
+    if (!this.acquireVoice()) return;
+
+    const ctx = this.ctx!;
+    const now = ctx.currentTime;
+    const dur = 0.03 + 0.05 * random();
+    const src = ctx.createBufferSource();
+    src.buffer = this.white;
+    src.loop = true;
+    src.playbackRate.value = 1.2 + 0.6 * random();
+    const band = ctx.createBiquadFilter();
+    band.type = 'bandpass';
+    band.frequency.value = 1500 + 2500 * random();
+    band.Q.value = 1.6;
+    const gain = ctx.createGain();
+    envelope(gain.gain, now, 0.004, CRACKLE_LEVEL * (0.5 + random()), dur);
+    src.connect(band);
+    band.connect(gain);
+    gain.connect(this.airBus);
+    src.start(now, random() * this.white.duration);
+    src.stop(now + dur + 0.03);
+    this.trackVoice(src, band, gain);
+  }
+
+  private fireBurning = false;
+  private fireCrackleTimer = 0;
+
   /**
    * Rewinds every clock this system owns and silences anything still ringing.
    *
@@ -1574,6 +1957,8 @@ export class AudioSystem {
     // Back to the initial delay, not to zero: a shot that opens on a gull cry is
     // a shot whose first second is about the gull.
     this.gullTimer = GULL_FIRST_DELAY;
+    this.fireBurning = false;
+    this.fireCrackleTimer = 0;
     this.stopVoices();
   }
 

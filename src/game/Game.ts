@@ -115,6 +115,9 @@ export class Game {
   private time = 0;
   private mmFrame = 0;
 
+  /** 沉船音效每艘只响一次。 */
+  private readonly sinkSounded = new WeakSet<GameShip>();
+
   private readonly keys = new Set<string>();
   private readonly collisionCooldowns = new Map<string, number>();
   private cidCounter = 0;
@@ -309,6 +312,7 @@ export class Game {
     this.gameOverT = 0;
     this.gameOverShown = false;
     this.hud.hideGameOver();
+    this.audio.playRestart();
     this.begin();
   }
 
@@ -324,6 +328,7 @@ export class Game {
     if (this.state === 'playing' && player.sinking) {
       this.state = 'over';
       this.gameOverT = 0;
+      this.audio.playGameOver();
     }
 
     // ---- 玩家操控（旧版手感：帆量连续、舵效随速） ----
@@ -378,10 +383,31 @@ export class Game {
     this.cooldownL = Math.max(0, this.cooldownL - dt);
     this.cooldownR = Math.max(0, this.cooldownR - dt);
     this.cooldownBow = Math.max(0, this.cooldownBow - dt);
-    // 满装填计时：冷却归零后开始累积（开火时清零）
-    if (this.cooldownL <= 0) this.primeL = Math.min(FEEL.PRIME_TIME, this.primeL + dt);
-    if (this.cooldownR <= 0) this.primeR = Math.min(FEEL.PRIME_TIME, this.primeR + dt);
-    if (this.cooldownBow <= 0) this.primeBow = Math.min(FEEL.PRIME_TIME, this.primeBow + dt);
+
+    // 航行氛围声：船体嘎吱（随速概率）+ 满帆兜风
+    if (this.state === 'playing' && !player.sinking) {
+      const spd = Math.abs(player.speed);
+      if (spd > 2 && Math.random() < dt * spd * 0.02) this.audio.playCreak();
+      if (
+        this.sailAmount > 0.95 &&
+        spd > player.maxSpeed * 0.7 &&
+        Math.random() < dt * 0.15
+      ) {
+        this.audio.playSailGust();
+      }
+    }
+    // 满装填计时：冷却归零后开始累积（开火时清零）；
+    // 蓄满的沿叮一声就绪提示（每舷+艏炮独立，首局出航的首次蓄满也会提示）
+    const canDing = this.state === 'playing' && !player.sinking;
+    const primeStep = (prime: number, cooldown: number): number => {
+      if (cooldown > 0) return prime;
+      const next = Math.min(FEEL.PRIME_TIME, prime + dt);
+      if (canDing && prime < FEEL.PRIME_TIME && next >= FEEL.PRIME_TIME) this.audio.playReady();
+      return next;
+    };
+    this.primeL = primeStep(this.primeL, this.cooldownL);
+    this.primeR = primeStep(this.primeR, this.cooldownR);
+    this.primeBow = primeStep(this.primeBow, this.cooldownBow);
 
     // ---- 实体更新 ----
     player.update(dt, this.heightAt);
@@ -399,6 +425,7 @@ export class Game {
     this.supplies?.update(dt, this.time, (event) => {
       this.combat.splash(event.position);
       this.audio.playPickup();
+      this.audio.playSplash(0.4); // 小水花（拾取/漏水级，非炮弹级）
       if (event.kind === 'repair') {
         player.hp = Math.min(player.maxHp, player.hp + (this.supplies?.repairAmount ?? 10));
         this.hud.floatText('+10 修复');
@@ -430,8 +457,14 @@ export class Game {
     ships.push(player);
     for (const e of enemies) ships.push(e);
 
-    // ---- 沉船冒泡 ----
+    // ---- 沉船冒泡（沉船音效每艘一次） + 着火噼啪开关 ----
+    let anyFire = false;
     for (const s of ships) {
+      if (s.sinking && !s.dead && !this.sinkSounded.has(s)) {
+        this.sinkSounded.add(s);
+        this.audio.playSink();
+      }
+      if (!s.sinking && s.debuff.fire > 0) anyFire = true;
       if (!s.sinking || s.dead) continue;
       if (Math.random() < dt * 8) {
         const pos = this.scratch.copy(s.position);
@@ -441,6 +474,7 @@ export class Game {
         this.combat.bubbles(pos); // Burst 构造时拷贝坐标，复用向量安全
       }
     }
+    this.audio.setFireBurning(anyFire);
 
     // ---- debuff 粒子：着火冒火焰、漏水舷侧冒水花；大雨浇灭所有着火 ----
     for (const s of ships) {
@@ -738,7 +772,7 @@ export class Game {
               (a.position.z + b.position.z) / 2,
             );
             this.combat.explosion(mid); // 木屑+硝烟
-            this.audio.playHit();
+            this.audio.playCollision(); // 厚重撞击声，区别于炮击命中
             a.takeDamage(dmgA);
             b.takeDamage(dmgB);
             // 玩家造成的撞击伤害：敌船飘白字 + 亮血条

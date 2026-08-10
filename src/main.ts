@@ -1362,6 +1362,13 @@ class App {
     this.stormQuote = new StormQuote(this.uiRoot);
     this.hud.setBackend(this.backend);
 
+    // UI 点击音：ui-root 内按钮/下拉/输入统一一声（事件委托，各控件无需自己接）。
+    // 开始门听不到——它在 App/AudioSystem 存在之前就已经完成使命。
+    this.uiRoot.addEventListener('click', (e) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest('button, select, input')) this.audio.playUiClick();
+    });
+
     // Built only where it will be used. A mouse user has better controls and a
     // stick over the frame would only be in the way; constructing it anyway and
     // hiding it would leave a pointer target on the canvas for every desktop
