@@ -1787,3 +1787,25 @@ body {
   background: var(--ink-deep);
   color: var(--red);
 }
+
+/* 选船卡 3D 缩略图 */
+.shipselect__thumb {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 2 / 1;
+  margin-bottom: 4px;
+  background: var(--ink-deep);
+  border: 1px solid var(--rule-soft);
+  font-size: 11px;
+  color: var(--bone-dim);
+  overflow: hidden;
+}
+
+.shipselect__thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}

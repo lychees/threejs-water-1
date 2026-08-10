@@ -426,6 +426,15 @@ export const FIGUREHEADS = [
   { id: 'dragon', cn: '海龙' },
   { id: 'skull', cn: '骷髅' },
   { id: 'dolphin', cn: '海豚' },
+  { id: 'goddess', cn: '女神' },
+  { id: 'mermaid', cn: '美人鱼' },
+  { id: 'lion', cn: '狮首' },
+  { id: 'horse', cn: '马首' },
+  { id: 'shark', cn: '鲨鱼' },
+  { id: 'whale', cn: '鲸鱼' },
+  { id: 'ray', cn: '鳐鱼' },
+  { id: 'eagle', cn: '雄鹰' },
+  { id: 'octopus', cn: '章鱼' },
 ] as const;
 
 export type FigureheadId = (typeof FIGUREHEADS)[number]['id'];
@@ -491,6 +500,180 @@ export function buildFigurehead(kind: FigureheadId): THREE.Group {
     tail.rotation.x = -Math.PI / 2;
     tail.position.set(0, 0.28, -0.55);
     g.add(tail);
+  } else if (kind === 'goddess') {
+    // 女神：圆锥裙 + 球头 + 双臂
+    const marble = hullMat(0xd8d4cc);
+    const dress = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.7, 7), marble);
+    dress.position.y = 0.35;
+    g.add(dress);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.12, 7, 6), marble);
+    head.position.y = 0.82;
+    g.add(head);
+    for (const side of [-1, 1]) {
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.4, 5), marble);
+      arm.position.set(side * 0.2, 0.62, 0.05);
+      arm.rotation.z = -side * 1.1; // 双臂上举
+      g.add(arm);
+    }
+  } else if (kind === 'mermaid') {
+    // 美人鱼：鱼尾 + 上身 + 扬臂（与女神同为航神信仰，身形更俯冲）
+    const skin = hullMat(0xd8b8a0);
+    const tailMat = hullMat(0x3a7f8a);
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.13, 0.34, 6), skin);
+    body.position.set(0, 0.52, 0.05);
+    body.rotation.x = 0.35; // 前倾
+    g.add(body);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.1, 7, 6), skin);
+    head.position.set(0, 0.74, 0.16);
+    g.add(head);
+    // 尾鳍向后下方拖出
+    const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.03, 0.5, 6), tailMat);
+    tail.position.set(0, 0.22, -0.12);
+    tail.rotation.x = -0.55;
+    g.add(tail);
+    for (const side of [-1, 1]) {
+      const fluke = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 4), tailMat);
+      fluke.position.set(side * 0.09, 0.06, -0.34);
+      fluke.rotation.x = -Math.PI / 2 - 0.4;
+      fluke.rotation.z = -side * 0.7;
+      g.add(fluke);
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.3, 5), skin);
+      arm.position.set(side * 0.15, 0.6, 0.14);
+      arm.rotation.z = -side * 1.0;
+      g.add(arm);
+    }
+  } else if (kind === 'lion') {
+    // 狮首：头球 + 鬃毛锥圈 + 吻部
+    const tawny = hullMat(0xb5854a);
+    const maneMat = hullMat(0x7a4f22);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), tawny);
+    head.position.set(0, 0.35, 0.05);
+    g.add(head);
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 4), maneMat);
+      cone.position.set(Math.cos(a) * 0.22, 0.35 + Math.sin(a) * 0.22, 0.0);
+      cone.rotation.z = -a - Math.PI / 2; // 朝外
+      g.add(cone);
+    }
+    const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.12, 0.14), tawny);
+    muzzle.position.set(0, 0.28, 0.24);
+    g.add(muzzle);
+  } else if (kind === 'horse') {
+    // 马首：斜颈 + 长头 + 双耳
+    const coat = hullMat(0x7a5a38);
+    const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.13, 0.55, 6), coat);
+    neck.position.set(0, 0.22, 0);
+    neck.rotation.x = 0.5;
+    g.add(neck);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.17, 0.45), coat);
+    head.position.set(0, 0.52, 0.28);
+    head.rotation.x = 0.25;
+    g.add(head);
+    for (const side of [-1, 1]) {
+      const ear = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.14, 4), coat);
+      ear.position.set(side * 0.06, 0.66, 0.12);
+      g.add(ear);
+    }
+    const mane = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.5, 0.12), hullMat(0x3a2a18));
+    mane.position.set(0, 0.35, -0.13);
+    mane.rotation.x = 0.5;
+    g.add(mane);
+  } else if (kind === 'shark') {
+    // 鲨鱼：锥身 + 三角背鳍 + 尾鳍 + 张口
+    const bronze = hullMat(0x6f7a6a);
+    const body = new THREE.Mesh(new THREE.ConeGeometry(0.17, 0.75, 7), bronze);
+    body.rotation.x = Math.PI / 2;
+    body.position.set(0, 0.3, 0.05);
+    g.add(body);
+    const dorsal = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.25, 4), bronze);
+    dorsal.position.set(0, 0.5, -0.05);
+    g.add(dorsal);
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 4), bronze);
+    tail.rotation.x = -Math.PI / 2;
+    tail.position.set(0, 0.32, -0.42);
+    g.add(tail);
+    const jaw = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.18), hullMat(0x2a2020));
+    jaw.position.set(0, 0.2, 0.38);
+    jaw.rotation.x = 0.4; // 张口
+    g.add(jaw);
+  } else if (kind === 'whale') {
+    // 鲸鱼：纺锤身 + 双尾鳍 + 小背鳍
+    const bronze = hullMat(0x5f6f72);
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.32, 8, 6), bronze);
+    body.scale.set(0.5, 0.42, 1.4);
+    body.position.y = 0.3;
+    g.add(body);
+    for (const side of [-1, 1]) {
+      const fluke = new THREE.Mesh(new THREE.ConeGeometry(0.09, 0.3, 4), bronze);
+      fluke.position.set(side * 0.14, 0.32, -0.5);
+      fluke.rotation.z = -side * 1.4;
+      fluke.rotation.x = -0.6;
+      g.add(fluke);
+    }
+    const dorsal = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.16, 4), bronze);
+    dorsal.position.set(0, 0.5, -0.1);
+    g.add(dorsal);
+  } else if (kind === 'ray') {
+    // 鳐鱼：扁菱形盘 + 细长尾
+    const bronze = hullMat(0x66707a);
+    const disc = new THREE.Mesh(new THREE.SphereGeometry(0.34, 6, 4), bronze);
+    disc.scale.set(1.35, 0.15, 1.0);
+    disc.position.y = 0.25;
+    g.add(disc);
+    const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.04, 0.55, 4), bronze);
+    tail.rotation.x = Math.PI / 2 + 0.15;
+    tail.position.set(0, 0.24, -0.55);
+    g.add(tail);
+  } else if (kind === 'eagle') {
+    // 雄鹰：展翅双翼 + 钩喙（船首像里少见的横向展开，轮廓靠翼展读）
+    const feather = hullMat(0x4a3826);
+    const body = new THREE.Mesh(new THREE.SphereGeometry(0.16, 7, 6), feather);
+    body.scale.set(0.8, 1, 1.3);
+    body.position.y = 0.3;
+    g.add(body);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.09, 7, 6), hullMat(0xe8e2d4));
+    head.position.set(0, 0.48, 0.16);
+    g.add(head);
+    const beak = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.14, 4), hullMat(0xd4b04a));
+    beak.rotation.x = Math.PI / 2;
+    beak.position.set(0, 0.47, 0.28);
+    g.add(beak);
+    for (const side of [-1, 1]) {
+      // 每侧两片翼面，略上掠
+      const inner = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.03, 0.2), feather);
+      inner.position.set(side * 0.24, 0.42, 0);
+      inner.rotation.z = side * 0.35;
+      g.add(inner);
+      const outer = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.02, 0.16), feather);
+      outer.position.set(side * 0.5, 0.52, -0.02);
+      outer.rotation.z = side * 0.55;
+      g.add(outer);
+    }
+    const tail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.02, 0.22), feather);
+    tail.position.set(0, 0.26, -0.28);
+    tail.rotation.x = 0.25;
+    g.add(tail);
+  } else if (kind === 'octopus') {
+    // 章鱼：球头 + 八条放射触手（锥段前卷）
+    const skin = hullMat(0x8a4a5a);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.22, 8, 6), skin);
+    head.position.y = 0.5;
+    head.scale.y = 1.25;
+    g.add(head);
+    for (const side of [-1, 1]) {
+      const eye = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), hullMat(0xe8e2d4));
+      eye.position.set(side * 0.12, 0.52, 0.17);
+      g.add(eye);
+    }
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.05, 0.5, 5), skin);
+      arm.position.set(Math.cos(a) * 0.16, 0.2, Math.sin(a) * 0.16);
+      arm.rotation.z = Math.cos(a) * 0.9;
+      arm.rotation.x = -Math.sin(a) * 0.9;
+      g.add(arm);
+    }
   }
   return g;
 }

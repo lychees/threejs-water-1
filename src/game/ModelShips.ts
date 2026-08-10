@@ -13,6 +13,8 @@
 
 import * as THREE from 'three/webgpu';
 import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { assetUrl } from '../core/paths';
 import type { AssetLoader } from '../scene/AssetLoader';
 
 export interface ShipModelDef {
@@ -169,24 +171,54 @@ export function loadShipModel(assets: AssetLoader, id: string): Promise<THREE.Gr
   if (!def) return Promise.resolve(null);
   let pending = cache.get(id);
   if (!pending) {
-    pending = assets
-      .load(def.path)
-      .then((scene) => {
-        const template = normalizeModel(scene, def.targetLength, def.flip ?? null);
-        console.info(
-          `[ship-model] ${id} 原始船长 ${(template.userData.rawLength as number).toFixed(2)}，` +
-            `缩放系数 ${(template.userData.scale as number).toFixed(4)}，` +
-            `船头判定 ${template.userData.flipped ? '-Z（已翻转 180°）' : '+Z（未翻转）'}`,
-        );
+    pending = loadRaw(assets, def.path)
+      .then((scene) => (scene ? normalizeModel(scene, def.targetLength, def.flip ?? null) : null))
+      .then((template) => {
+        if (template) logTemplate(id, template);
         return template;
-      })
-      .catch((error: unknown) => {
-        console.warn(`[ship-model] ${id} 加载失败，回退程序化船：`, error);
-        return null;
       });
     cache.set(id, pending);
   }
   return pending;
+}
+
+/** 选船门（App/AssetLoader 还不存在）用的直连加载：独立 GLTFLoader + 独立缓存。 */
+export function loadShipModelDirect(id: string): Promise<THREE.Group | null> {
+  const def = SHIP_MODELS[id];
+  if (!def) return Promise.resolve(null);
+  let pending = directCache.get(id);
+  if (!pending) {
+    pending = new GLTFLoader()
+      .loadAsync(assetUrl(def.path))
+      .then((gltf) => {
+        const template = normalizeModel(gltf.scene, def.targetLength, def.flip ?? null);
+        logTemplate(id, template);
+        return template;
+      })
+      .catch((error: unknown) => {
+        console.warn(`[ship-model] ${id} 加载失败：`, error);
+        return null;
+      });
+    directCache.set(id, pending);
+  }
+  return pending;
+}
+
+const directCache = new Map<string, Promise<THREE.Group | null>>();
+
+function loadRaw(assets: AssetLoader, path: string): Promise<THREE.Group | null> {
+  return assets.load(path).catch((error: unknown) => {
+    console.warn(`[ship-model] ${path} 加载失败：`, error);
+    return null;
+  });
+}
+
+function logTemplate(id: string, template: THREE.Group): void {
+  console.info(
+    `[ship-model] ${id} 原始船长 ${(template.userData.rawLength as number).toFixed(2)}，` +
+      `缩放系数 ${(template.userData.scale as number).toFixed(4)}，` +
+      `船头判定 ${template.userData.flipped ? '-Z（已翻转 180°）' : '+Z（未翻转）'}`,
+  );
 }
 
 export interface ShipModelInstance {

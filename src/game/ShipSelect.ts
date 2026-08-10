@@ -1,24 +1,31 @@
 /**
- * 选船卡片网格：大航海时代2 全 25 船，中文名 + 英文名 + 血/速/舵/炮属性条。
+ * 选船卡片网格：大航海时代2 全 25 船，3D 缩略图 + 中文名 + 英文名 + 属性条。
  * 挂载在开始门（StartGate）里；选择即时写 localStorage（SHIP_STORAGE_KEY），
  * Game 启动时经 resolveShipId() 读回。
  *
- * 缩略图按 B2 约定从简：纯文字卡 + 属性条，不做模型实拍。
- * 属性条先按基准属性渲染，ships.json 到达后刷新为真实比例。
+ * 缩略图（ShipThumbs.ts，共享离屏渲染器）：逐艘排队渲染，每帧一艘，卡片先
+ * 占位后填图，不卡开始门；勾选「精致模型」后重渲有真实模型的 6 张，改染色
+ * 重渲当前选中那张；任何一张渲染失败就留着文字占位，不影响开门。
  */
 
 import { assetUrl } from '../core/paths';
+import type * as THREE from 'three/webgpu';
 import {
   SHIP_DEFS,
   FALLBACK_STATS,
   FIGUREHEADS,
+  buildShip,
   loadShipStats,
   resolveShipId,
   storeShipId,
   resolveCustomization,
   storeCustomizationKey,
+  type ShipDef,
+  type ShipCustomization,
   type ShipStats,
 } from './Shipyard';
+import { loadShipModelDirect, instantiateShip } from './ModelShips';
+import { renderShipThumbnail } from './ShipThumbs';
 
 /** 属性条归一化分母（旧 js/main.js 选船卡片同源）。 */
 const STAT_MAX = { hp: 170, maxSpeed: 21, turnRate: 1.5, cannons: 6 } as const;
@@ -29,7 +36,31 @@ const STAT_LABELS: readonly [keyof ShipStats, string][] = [
   ['cannons', '炮'],
 ];
 
+/** 缩略图用的定制状态快照（模块级，随输入事件更新）。 */
+let thumbCustom: ShipCustomization = { fancy: false, sailColor: null, hullColor: null, figurehead: 'none' };
+
+/** 生成一艘船的缩略图模型（一次性副本，渲染完由 renderShipThumbnail 释放几何体）。 */
+async function buildThumbModel(def: ShipDef): Promise<THREE.Group | null> {
+  const sailColor = thumbCustom.sailColor ? Number.parseInt(thumbCustom.sailColor.slice(1), 16) : null;
+  const hullColor = thumbCustom.hullColor ? Number.parseInt(thumbCustom.hullColor.slice(1), 16) : null;
+  if (thumbCustom.fancy && def.model) {
+    const template = await loadShipModelDirect(def.model);
+    if (template) {
+      const tint = sailColor !== null || hullColor !== null ? { sail: sailColor ?? undefined, hull: hullColor ?? undefined } : null;
+      const inst = instantiateShip(template, tint);
+      inst.setSailAmount?.(1);
+      return inst.group;
+    }
+    // 模型加载失败落回程序化预览
+  }
+  const visual = buildShip(def.spec, { sailColor, hullColor });
+  visual.setSailAmount(1);
+  return visual.group;
+}
+
 export function buildShipSelect(): HTMLElement {
+  thumbCustom = resolveCustomization();
+
   const section = document.createElement('div');
   section.className = 'shipselect';
 
@@ -46,6 +77,7 @@ export function buildShipSelect(): HTMLElement {
 
   let selected = resolveShipId();
   const barsByDef = new Map<number, Map<keyof ShipStats, HTMLElement>>();
+  const thumbByDef = new Map<number, HTMLElement>();
   const cards: HTMLElement[] = [];
 
   for (const def of SHIP_DEFS) {
@@ -56,6 +88,13 @@ export function buildShipSelect(): HTMLElement {
     card.setAttribute('aria-selected', String(def.id === selected));
     card.classList.toggle('is-selected', def.id === selected);
     card.dataset.ship = String(def.id);
+
+    // 缩略图占位（渲染完成后替换成 img；失败则留文字）
+    const thumb = document.createElement('span');
+    thumb.className = 'shipselect__thumb';
+    thumb.textContent = def.cn;
+    thumbByDef.set(def.id, thumb);
+    card.append(thumb);
 
     const name = document.createElement('span');
     name.className = 'shipselect__name';
@@ -111,13 +150,59 @@ export function buildShipSelect(): HTMLElement {
   paint(Object.fromEntries(SHIP_DEFS.map((d) => [d.id, FALLBACK_STATS])));
   void loadShipStats(assetUrl('/data/ships.json')).then(paint);
 
-  section.append(buildCustomizeRow());
+  // ---- 缩略图队列：每帧一艘，渲染 token 防止重渲请求互相覆盖 ----
+  let thumbToken = 0;
+  const renderThumb = async (def: ShipDef): Promise<void> => {
+    const token = thumbToken;
+    const model = await buildThumbModel(def);
+    if (!model || token !== thumbToken) return;
+    const url = await renderShipThumbnail(model);
+    if (!url || token !== thumbToken) return;
+    const holder = thumbByDef.get(def.id);
+    if (!holder) return;
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = def.cn;
+    img.className = 'shipselect__thumb-img';
+    holder.replaceChildren(img);
+  };
+  const queueThumbs = (defs: ShipDef[]): void => {
+    const token = ++thumbToken;
+    let i = 0;
+    const step = async (): Promise<void> => {
+      while (i < defs.length && token === thumbToken) {
+        const def = defs[i++];
+        // 不在这里查 isConnected：buildShipSelect 是在 replaceChildren 的参数
+        // 位置被调用的，首轮迭代时网格还没进 DOM；门关闭由 token/写入检查兜住。
+        await renderThumb(def); // 每艘一帧渲染，串行即节流
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+    };
+    void step();
+  };
+  queueThumbs(SHIP_DEFS);
+
+  section.append(
+    buildCustomizeRow({
+      onFancyChange: () => {
+        // 只重渲有真实模型的几张；未勾选回到程序化预览
+        queueThumbs(SHIP_DEFS.filter((d) => d.model));
+      },
+      onTintChange: () => {
+        const def = SHIP_DEFS.find((d) => d.id === selected);
+        if (def) queueThumbs([def]);
+      },
+    }),
+  );
   return section;
 }
 
 /** 定制行：精致模型勾选 + 帆色/船体色 + 船首像。写入 localStorage，Game 启动时读。 */
-function buildCustomizeRow(): HTMLElement {
-  const custom = resolveCustomization();
+function buildCustomizeRow(hooks: {
+  onFancyChange: () => void;
+  onTintChange: () => void;
+}): HTMLElement {
+  const custom = thumbCustom;
   const row = document.createElement('div');
   row.className = 'shipselect__custom';
 
@@ -129,6 +214,8 @@ function buildCustomizeRow(): HTMLElement {
   fancyChk.checked = custom.fancy;
   fancyChk.addEventListener('change', () => {
     storeCustomizationKey('fancy', fancyChk.checked ? '1' : '0');
+    thumbCustom = { ...thumbCustom, fancy: fancyChk.checked };
+    hooks.onFancyChange();
   });
   fancyLabel.append(fancyChk, document.createTextNode('精致模型（6 艘可用）'));
 
@@ -138,7 +225,11 @@ function buildCustomizeRow(): HTMLElement {
     const input = document.createElement('input');
     input.type = 'color';
     input.value = initial;
-    input.addEventListener('input', () => storeCustomizationKey(key, input.value));
+    input.addEventListener('input', () => {
+      storeCustomizationKey(key, input.value);
+      thumbCustom = { ...thumbCustom, [key]: input.value };
+      hooks.onTintChange();
+    });
     label.append(document.createTextNode(labelText), input);
     return label;
   };
@@ -153,7 +244,10 @@ function buildCustomizeRow(): HTMLElement {
     fhSelect.append(opt);
   }
   fhSelect.value = custom.figurehead;
-  fhSelect.addEventListener('change', () => storeCustomizationKey('figurehead', fhSelect.value));
+  fhSelect.addEventListener('change', () => {
+    storeCustomizationKey('figurehead', fhSelect.value);
+    thumbCustom = { ...thumbCustom, figurehead: fhSelect.value as ShipCustomization['figurehead'] };
+  });
   fhLabel.append(document.createTextNode('船首像 '), fhSelect);
 
   row.append(
