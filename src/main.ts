@@ -64,6 +64,7 @@ import { DEFAULT_UI_STATE, type UiState } from './ui/types';
 import { openStartGate, type StartSelection } from './ui/StartGate';
 import { Game } from './game/Game';
 import { loadShipStats } from './game/Shipyard';
+import { Terrain, resolveBBox } from './game/terrain/Terrain';
 import { assetUrl } from './core/paths';
 
 /** Scratch for the test-hook camera pin; the hook must not allocate either. */
@@ -1238,6 +1239,18 @@ class App {
       // sampler 的波高采样，敌船模型经 AssetLoader 缓存克隆。
       // B2：25 船属性表随内容加载一并取回，失败时全表回落基准属性。
       const shipStats = await loadShipStats(assetUrl('/data/ships.json'));
+      // 自定义海域：有选区就拉 Overpass 海岸线实时生成地形；任何失败
+      // （超时/无数据/全陆全海）都静默回退默认迷雾岛，不影响进场。
+      let terrain: Terrain | null = null;
+      const bbox = resolveBBox();
+      if (bbox) {
+        try {
+          terrain = await Terrain.load(bbox);
+          console.info(`[terrain] 自定义海域就绪（${bbox.s},${bbox.w} ~ ${bbox.n},${bbox.e}）`);
+        } catch (error) {
+          console.warn('[terrain] 自定义海域生成失败，回退默认战场：', error);
+        }
+      }
       if (this.disposed) return;
       this.game = new Game({
         scene: this.scene,
@@ -1248,6 +1261,7 @@ class App {
         controls: this.shipControls,
         audio: this.audio,
         shipStats,
+        terrain,
         enemyDensity: this.state.enemyDensity,
         isRaining: () =>
           this.weather.getKind() === 'rain' && this.weather.getIntensity() > 0.05,

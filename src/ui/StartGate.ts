@@ -4,6 +4,8 @@ import {
   type RendererBackend,
 } from './types.ts';
 import { buildShipSelect } from '../game/ShipSelect';
+import { openAreaSelect } from '../game/AreaSelect';
+import { resolveBBox } from '../game/terrain/Terrain';
 
 const STORAGE_KEY = 'web-ocean:start-selection:v1';
 
@@ -223,6 +225,32 @@ function renderGate(
   probeReadout.className = 'boot__gate-readout';
   probeReadout.textContent = describeProbe(probe);
 
+  // ---- 战场选择（默认迷雾岛 / 自定义海域） ----
+  const areaLabel = document.createElement('div');
+  areaLabel.className = 'boot__gate-label';
+  areaLabel.textContent = 'Battlefield · 战场';
+  const areaRow = document.createElement('div');
+  areaRow.className = 'boot__area';
+  const areaName = document.createElement('span');
+  areaName.className = 'boot__area-name';
+  const areaBtn = document.createElement('button');
+  areaBtn.type = 'button';
+  areaBtn.className = 'boot__choice boot__area-btn';
+  areaBtn.textContent = '框选海域…';
+  const paintArea = (): void => {
+    const bbox = resolveBBox();
+    areaName.textContent = bbox
+      ? `自定义海域 ${bbox.s.toFixed(2)},${bbox.w.toFixed(2)} ~ ${bbox.n.toFixed(2)},${bbox.e.toFixed(2)}`
+      : '迷雾岛（默认）';
+  };
+  paintArea();
+  areaBtn.addEventListener('click', () => {
+    void openAreaSelect().then((r) => {
+      if (r.bbox !== undefined) paintArea();
+    });
+  });
+  areaRow.append(areaName, areaBtn);
+
   const start = document.createElement('button');
   start.type = 'button';
   start.className = 'btn btn--primary boot__start';
@@ -235,6 +263,8 @@ function renderGate(
     qualityLabel,
     qualityGroup,
     buildShipSelect(),
+    areaLabel,
+    areaRow,
     probeReadout,
     start,
   );

@@ -97,6 +97,8 @@ export class EnemyFleet {
   weatherSpeedMul = 1; // 由 Game 每帧写入：雨天全船减速
   /** 同屏敌船基准数（Panel 滑杆，1~6）。 */
   densityCap = 2;
+  /** 自定义海域的活动范围（Game 注入）；null = 默认圆形世界。 */
+  limits: { cx: number; cz: number; r: number } | null = null;
 
   private readonly scene: THREE.Scene;
   private readonly combat: Combat;
@@ -152,6 +154,11 @@ export class EnemyFleet {
     ship.heading = angle + Math.PI; // 大致朝玩家
     ship.orbitDir = Math.random() < 0.5 ? 1 : -1;
     ship.cooldown = 2 + Math.random() * 3;
+    if (this.limits) {
+      ship.limitCX = this.limits.cx;
+      ship.limitCZ = this.limits.cz;
+      ship.limitR = this.limits.r;
+    }
     this.scene.add(ship.object);
     this.enemies.push(ship);
   }

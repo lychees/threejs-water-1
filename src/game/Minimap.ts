@@ -15,6 +15,19 @@ export class Minimap {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
   private large = false;
+  /** 自定义海域的掩码图与换算参数（null = 默认海域，画基座岛屿圆点）。 */
+  private terrain: {
+    image: HTMLCanvasElement;
+    cx: number;
+    cz: number;
+    sizeX: number;
+    sizeZ: number;
+  } | null = null;
+
+  /** 自定义海域轮廓图（陆绿海蓝掩码），Game 在地形加载后调用一次。 */
+  setTerrain(image: HTMLCanvasElement, cx: number, cz: number, sizeX: number, sizeZ: number): void {
+    this.terrain = { image, cx, cz, sizeX, sizeZ };
+  }
 
   constructor(root: HTMLElement) {
     this.canvas = document.createElement('canvas');
@@ -61,9 +74,25 @@ export class Minimap {
       ctx.fill();
     };
 
-    // 岛屿：绿色块（按平均岸线半径画圆）
-    const ir = ISLAND.radius * s;
-    if (ir >= 3) dot(toMapX(ISLAND.x), toMapY(ISLAND.z), ir, '#3f7a4f');
+    // 岛屿/海岸：自定义海域画掩码图（真实海岸轮廓），默认海域画基座大岛绿点
+    if (this.terrain) {
+      const t = this.terrain;
+      const gw = t.image.width; // GRID
+      // 世界范围 → 掩码图源矩形（像素）
+      const sx = ((px - range - (t.cx - t.sizeX / 2)) / t.sizeX) * gw;
+      const sz = ((pz - range - (t.cz - t.sizeZ / 2)) / t.sizeZ) * gw;
+      const sw = ((range * 2) / t.sizeX) * gw;
+      const sh = ((range * 2) / t.sizeZ) * gw;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cx, cx - 2, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(t.image, sx, sz, sw, sh, 4, 4, W - 8, W - 8);
+      ctx.restore();
+    } else {
+      const ir = ISLAND.radius * s;
+      if (ir >= 3) dot(toMapX(ISLAND.x), toMapY(ISLAND.z), ir, '#3f7a4f');
+    }
 
     // 补给：修复=木色，宝箱=金色
     if (supplies) {

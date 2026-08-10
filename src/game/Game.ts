@@ -39,6 +39,7 @@ import {
 import { loadShipModel, instantiateShip, SHIP_MODELS } from './ModelShips';
 import { Minimap } from './Minimap';
 import { FEEL } from './PlayerConfig';
+import type { Terrain } from './terrain/Terrain';
 
 /** 基座 glTF 船模归一化后的船长（米），缩放真实模型船型时以此为基准。 */
 const BASE_MODEL_LENGTH = 27;
@@ -67,6 +68,8 @@ export interface GameOptions {
   shipStats: Record<number, ShipStats>;
   /** 同屏敌船基准数（Panel 滑杆，1~6）。 */
   enemyDensity: number;
+  /** 自定义海域地形（null = 默认迷雾岛海域）。 */
+  terrain: Terrain | null;
   /** 基座天气：大雨（rain 且有一定强度）时灭火、不新附着火、全船减速。 */
   isRaining: () => boolean;
   /** 下雪（arctic）：轻度减速，不灭火。 */
@@ -87,6 +90,7 @@ export class Game {
   private readonly heightAt: WaveHeightAt;
   private readonly isRaining: () => boolean;
   private readonly isSnowing: () => boolean;
+  private readonly terrain: Terrain | null;
   private readonly abort = new AbortController();
 
   private readonly fanL: THREE.Mesh;
@@ -171,12 +175,39 @@ export class Game {
     this.hud = new GameHud(options.uiRoot);
     this.minimap = new Minimap(options.uiRoot);
 
+    // ---- 自定义海域：地形入场 + 出生点/活动范围/小地图轮廓 ----
+    this.terrain = options.terrain;
+    if (this.terrain) {
+      const terrain = this.terrain;
+      options.scene.add(terrain.mesh);
+      const range = (Math.min(terrain.sizeX, terrain.sizeZ) / 2) * 0.92;
+      const limits = { cx: terrain.center.x, cz: terrain.center.z, r: range };
+      this.player.limitCX = limits.cx;
+      this.player.limitCZ = limits.cz;
+      this.player.limitR = limits.r;
+      this.fleet.limits = limits;
+      this.player.position.copy(terrain.findSpawn()); // revive 之后再摆位
+      this.minimap.setTerrain(
+        terrain.makeMinimapImage(),
+        terrain.center.x,
+        terrain.center.z,
+        terrain.sizeX,
+        terrain.sizeZ,
+      );
+    }
+
     this.fanL = makeFanViz(options.scene);
     this.fanR = makeFanViz(options.scene);
     this.fanBow = makeFanViz(options.scene);
 
-    // 漂浮补给：模型异步到，到了才开始撒布
-    void Supplies.load(options.scene, options.assets, this.heightAt, this.player).then((s) => {
+    // 漂浮补给：模型异步到，到了才开始撒布；自定义海域只撒在水里
+    void Supplies.load(
+      options.scene,
+      options.assets,
+      this.heightAt,
+      this.player,
+      this.terrain ? (x, z) => this.terrain!.heightWorld(x, z) < -2 : null,
+    ).then((s) => {
       this.supplies = s;
     });
 
@@ -318,6 +349,7 @@ export class Game {
   private restart(): void {
     this.fleet.reset();
     this.player.revive();
+    if (this.terrain) this.player.position.copy(this.terrain.findSpawn());
     this.kills = 0;
     this.loot = 0;
     this.cooldownL = this.cooldownR = this.cooldownBow = 0;
@@ -441,6 +473,11 @@ export class Game {
         // 波次提升，HUD 每帧自动刷新
       },
     });
+    // 自定义海域：地形避浅（玩家与敌船同一规则——水深不足就往深水里推）
+    if (this.terrain) {
+      this.keepInDeepWater(player);
+      for (const e of this.fleet.enemies) this.keepInDeepWater(e);
+    }
     this.resolveShipCollisions();
 
     // ---- 补给 ----
@@ -568,6 +605,31 @@ export class Game {
   /** Panel 敌船密度滑杆：调低不杀现有敌船（只是不再补员），调高立即补。 */
   setEnemyDensity(n: number): void {
     this.fleet.densityCap = Math.round(THREE.MathUtils.clamp(n, 1, 6));
+  }
+
+  /**
+   * 地形避浅：水深 < 1.2m 就沿高度梯度往深水推（梯度方向即更深方向），
+   * 并衰减航速。比圆形世界边界柔和，船是"被水推回去"而不是撞墙。
+   */
+  private keepInDeepWater(ship: GameShip): void {
+    const terrain = this.terrain!;
+    const p = ship.position;
+    const h = terrain.heightWorld(p.x, p.z);
+    if (h < -1.2) return;
+    const g = 6;
+    const gx = terrain.heightWorld(p.x + g, p.z) - terrain.heightWorld(p.x - g, p.z);
+    const gz = terrain.heightWorld(p.x, p.z + g) - terrain.heightWorld(p.x, p.z - g);
+    const len = Math.hypot(gx, gz);
+    const push = (h + 1.2) * 1.5;
+    if (len < 1e-4) {
+      // 平顶上没有梯度：沿来路退
+      p.x -= Math.sin(ship.heading) * push;
+      p.z -= Math.cos(ship.heading) * push;
+    } else {
+      p.x -= (gx / len) * push;
+      p.z -= (gz / len) * push;
+    }
+    ship.speed *= 0.55;
   }
 
   dispose(): void {

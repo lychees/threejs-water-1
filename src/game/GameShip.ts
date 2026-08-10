@@ -73,6 +73,11 @@ export class GameShip {
   /** 各 debuff 剩余秒数。 */
   readonly debuff: Record<DebuffKind, number> = { fire: 0, leak: 0, sail: 0 };
 
+  /** 活动范围：默认原点周围 WORLD_LIMIT；自定义海域时由 Game 改为区域中心。 */
+  limitCX = 0;
+  limitCZ = 0;
+  limitR = WORLD_LIMIT;
+
   /** AI 附加状态（敌船用，玩家忽略）。 */
   orbitDir: 1 | -1 = 1;
   cooldown = 0;
@@ -227,10 +232,12 @@ export class GameShip {
     p.z += Math.cos(this.heading) * this.speed * dt;
 
     // 限制活动范围
-    const r = Math.hypot(p.x, p.z);
-    if (r > WORLD_LIMIT) {
-      p.x *= WORLD_LIMIT / r;
-      p.z *= WORLD_LIMIT / r;
+    const rx = p.x - this.limitCX;
+    const rz = p.z - this.limitCZ;
+    const r = Math.hypot(rx, rz);
+    if (r > this.limitR) {
+      p.x = this.limitCX + (rx * this.limitR) / r;
+      p.z = this.limitCZ + (rz * this.limitR) / r;
     }
 
     this.applyPose();

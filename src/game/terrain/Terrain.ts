@@ -1,0 +1,174 @@
+/**
+ * 自定义海域地形：Overpass 海岸线 → 高度场 → 陆地 mesh + 出生点 + 小地图轮廓。
+ *
+ * 摆放：区域中心放在 CUSTOM_CENTER（离基座迷雾岛与原点高原都足够远），
+ * 不改变基座 Seafloor——并存方案。代价是基座水体的浅滩染色/碎浪只认
+ * 原岛屿的高度场（TSL 孪生，运行期换不了），自定义区域的浅水视觉由
+ * 地形 mesh 自身的水下部分承担（沙滩色带延伸到水下）。
+ */
+
+import * as THREE from 'three/webgpu';
+import { fetchCoastlines, type BBox } from './overpass';
+import { buildHeightField, sampleHeight, GRID, type HeightField } from './heightfield';
+
+/** 区域中心（世界坐标）。迷雾岛在 (-1150,-780)，原点在高原浅水区，这里两边都不沾。 */
+export const CUSTOM_CENTER = { x: 6000, z: 6000 };
+
+const MESH_SEGMENTS = 192; // 地形网格密度（384 高度场的半价采样）
+
+export class Terrain {
+  readonly mesh: THREE.Mesh;
+  readonly center = CUSTOM_CENTER;
+
+  private constructor(private readonly field: HeightField) {
+    this.mesh = this.buildMesh();
+  }
+
+  static async load(bbox: BBox): Promise<Terrain> {
+    const { lines, nodeCount } = await fetchCoastlines(bbox);
+    if (lines.length === 0) throw new Error('该区域没有海岸线数据');
+    console.info(`[terrain] 海岸线 ${lines.length} 条 / ${nodeCount} 节点，开始光栅化`);
+    const field = buildHeightField(bbox, lines);
+    //  sanity：全陆或全海都不是战场
+    let land = 0;
+    for (let i = 0; i < field.landMask.length; i++) land += field.landMask[i];
+    const ratio = land / field.landMask.length;
+    if (ratio < 0.02 || ratio > 0.85) {
+      throw new Error(`陆地占比异常（${(ratio * 100).toFixed(0)}%），换一片有岛有海的位置`);
+    }
+    return new Terrain(field);
+  }
+
+  /** 战场局部坐标（区域中心为原点）的高度。 */
+  height(x: number, z: number): number {
+    return sampleHeight(this.field, x, z);
+  }
+
+  /** 世界坐标高度。 */
+  heightWorld(x: number, z: number): number {
+    return this.height(x - this.center.x, z - this.center.z);
+  }
+
+  isLandWorld(x: number, z: number): boolean {
+    return this.heightWorld(x, z) > 0;
+  }
+
+  /** 出生点：区域内距岸足够远的深水的 pseudo-random 候选中挑一个最深的。 */
+  findSpawn(): THREE.Vector3 {
+    let best: THREE.Vector3 | null = null;
+    let bestDepth = -Infinity;
+    for (let i = 0; i < 400; i++) {
+      const x = (Math.random() - 0.5) * this.field.sizeX * 0.8;
+      const z = (Math.random() - 0.5) * this.field.sizeZ * 0.8;
+      const h = this.height(x, z);
+      if (h < -8 && -h > bestDepth) {
+        bestDepth = -h;
+        best = new THREE.Vector3(x + this.center.x, 0, z + this.center.z);
+      }
+    }
+    return best ?? new THREE.Vector3(this.center.x, 0, this.center.z);
+  }
+
+  /** 小地图用：掩码直接画成 ImageData（陆绿海蓝），返回 canvas。 */
+  makeMinimapImage(): HTMLCanvasElement {
+    const G = GRID;
+    const canvas = document.createElement('canvas');
+    canvas.width = G;
+    canvas.height = G;
+    const ctx = canvas.getContext('2d')!;
+    const img = ctx.createImageData(G, G);
+    for (let i = 0; i < G * G; i++) {
+      const land = this.field.landMask[i];
+      img.data[i * 4] = land ? 63 : 6;
+      img.data[i * 4 + 1] = land ? 122 : 30;
+      img.data[i * 4 + 2] = land ? 79 : 44;
+      img.data[i * 4 + 3] = land ? 220 : 110;
+    }
+    ctx.putImageData(img, 0, 0);
+    return canvas;
+  }
+
+  /** 区域局部坐标 → 掩码图像素。Minimap 画轮廓时换算用。 */
+  get grid(): number {
+    return GRID;
+  }
+
+  get sizeX(): number {
+    return this.field.sizeX;
+  }
+
+  get sizeZ(): number {
+    return this.field.sizeZ;
+  }
+
+  private buildMesh(): THREE.Mesh {
+    const { sizeX, sizeZ } = this.field;
+    const seg = MESH_SEGMENTS;
+    const geo = new THREE.PlaneGeometry(sizeX, sizeZ, seg, seg);
+    geo.rotateX(-Math.PI / 2); // 平躺，+Z 朝南无所谓——采样用世界坐标
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const colors = new Float32Array(pos.count * 3);
+    const sand = new THREE.Color(0xc2b280);
+    const grass = new THREE.Color(0x4a7a3f);
+    const rock = new THREE.Color(0x6a6a66);
+    const underwater = new THREE.Color(0x9a8f6a);
+    const c = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      const lx = pos.getX(i);
+      const lz = pos.getZ(i);
+      const h = this.height(lx, lz);
+      pos.setY(i, h);
+      // 高程配色：水下沙 → 沙滩 → 植被 → 岩
+      if (h < 0) c.copy(underwater);
+      else if (h < 2) c.copy(sand);
+      else if (h < 12) c.copy(sand).lerp(grass, (h - 2) / 10);
+      else c.copy(grass).lerp(rock, Math.min(1, (h - 12) / 14));
+      colors[i * 3] = c.r;
+      colors[i * 3 + 1] = c.g;
+      colors[i * 3 + 2] = c.b;
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, flatShading: false }),
+    );
+    mesh.position.set(this.center.x, 0, this.center.z);
+    mesh.receiveShadow = true;
+    mesh.name = 'custom-terrain';
+    return mesh;
+  }
+}
+
+// ---------------------------------------------------------------- bbox 存取
+
+export const BBOX_STORAGE_KEY = 'web-ocean:bbox:v1';
+
+/** 当前选区：URL 参数 ?bbox=S,W,N,E 优先，其次 localStorage，null = 默认迷雾岛。 */
+export function resolveBBox(): BBox | null {
+  const parse = (raw: string | null): BBox | null => {
+    if (!raw) return null;
+    const parts = raw.split(',').map(Number);
+    if (parts.length !== 4 || parts.some((v) => !Number.isFinite(v))) return null;
+    const [s, w, n, e] = parts;
+    if (s >= n || w >= e) return null;
+    if (n - s > 0.2 || e - w > 0.2) return null; // ~20km 上限
+    return { s, w, n, e };
+  };
+  const fromUrl = parse(new URL(window.location.href).searchParams.get('bbox'));
+  if (fromUrl) return fromUrl;
+  try {
+    return parse(window.localStorage.getItem(BBOX_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+export function storeBBox(bbox: BBox | null): void {
+  try {
+    if (bbox) window.localStorage.setItem(BBOX_STORAGE_KEY, [bbox.s, bbox.w, bbox.n, bbox.e].join(','));
+    else window.localStorage.removeItem(BBOX_STORAGE_KEY);
+  } catch {
+    // 隐私模式：当次会话有效
+  }
+}

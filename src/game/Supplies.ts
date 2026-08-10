@@ -44,6 +44,7 @@ export class Supplies {
     private readonly player: GameShip,
     barrelTemplate: THREE.Object3D,
     chestTemplate: THREE.Object3D,
+    private readonly isWater: ((x: number, z: number) => boolean) | null,
   ) {
     for (let i = 0; i < SUPPLY_COUNT; i++) {
       const kind: SupplyKind = i % 3 === 2 ? 'loot' : 'repair'; // 约 1/3 宝箱
@@ -69,13 +70,15 @@ export class Supplies {
     assets: AssetLoader,
     heightAt: WaveHeightAt,
     player: GameShip,
+    /** 可选：自定义海域的水域判定（落点必须在水里）。 */
+    isWater: ((x: number, z: number) => boolean) | null = null,
   ): Promise<Supplies | null> {
     try {
       const [barrel, chest] = await Promise.all([
         assets.load(BARREL_URL),
         assets.load(CHEST_URL),
       ]);
-      return new Supplies(scene, heightAt, player, barrel, chest);
+      return new Supplies(scene, heightAt, player, barrel, chest, isWater);
     } catch (error) {
       console.error('[game] supplies failed to load', error);
       return null;
@@ -83,18 +86,25 @@ export class Supplies {
   }
 
   private place(item: Supply, around: THREE.Vector3, initial = false): void {
-    const angle = Math.random() * Math.PI * 2;
-    const dist = SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN);
-    item.object.position.set(
-      around.x + Math.cos(angle) * dist,
-      0,
-      around.z + Math.sin(angle) * dist,
-    );
-    item.object.rotation.y = Math.random() * Math.PI * 2;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN);
+      const x = around.x + Math.cos(angle) * dist;
+      const z = around.z + Math.sin(angle) * dist;
+      if (this.isWater && !this.isWater(x, z)) continue; // 自定义海域：只撒在水里
+      item.object.position.set(x, 0, z);
+      item.object.rotation.y = Math.random() * Math.PI * 2;
+      item.active = true;
+      item.respawnIn = 0;
+      item.object.visible = true;
+      if (!initial) item.phase = Math.random() * Math.PI * 2;
+      return;
+    }
+    // 8 次都落在岸上：贴着玩家附近总能找到水——放远点就行，下次重刷再随机
+    item.object.position.set(around.x + SPAWN_MIN, 0, around.z);
     item.active = true;
     item.respawnIn = 0;
     item.object.visible = true;
-    if (!initial) item.phase = Math.random() * Math.PI * 2;
   }
 
   /** 每帧：起伏 + 拾取判定 + 重刷。onPickup 只在真正拾取时触发。 */

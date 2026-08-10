@@ -1856,3 +1856,98 @@ body {
 .ghud__elevation.is-charging {
   color: var(--red);
 }
+
+/* --------------------------------------------------------------------------
+   自定义海域选区（Leaflet 弹层）
+   -------------------------------------------------------------------------- */
+
+.areaselect {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--ink-deep) 72%, transparent);
+}
+
+.areaselect__box {
+  width: min(760px, 92vw);
+  background: var(--ink);
+  border: 1px solid var(--rule);
+  padding: 16px;
+  font-family: var(--font-instrument);
+  color: var(--bone);
+}
+
+.areaselect__title {
+  font-size: 15px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.areaselect__map {
+  width: 100%;
+  height: 420px;
+  border: 1px solid var(--rule);
+  cursor: crosshair;
+}
+
+.areaselect__status {
+  font-size: 12px;
+  color: var(--bone-dim);
+  margin: 8px 0;
+  min-height: 16px;
+}
+
+.areaselect__actions {
+  display: flex;
+  gap: 10px;
+}
+
+.areaselect__actions .btn {
+  padding: 6px 14px;
+  background: var(--ink-raised);
+  color: var(--bone);
+  border: 1px solid var(--rule);
+  font-family: var(--font-instrument);
+  cursor: pointer;
+}
+
+.areaselect__actions .btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.areaselect__actions .areaselect__use:not(:disabled) {
+  border-top: 3px double var(--red);
+}
+
+.areaselect__credit {
+  margin-top: 8px;
+  font-size: 10px;
+  color: var(--bone-dim);
+}
+
+.areaselect__credit a {
+  color: var(--bone-dim);
+}
+
+/* 战场选择行（开始门） */
+.boot__area {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 6px 0 10px;
+  font-size: 12px;
+}
+
+.boot__area-name {
+  color: var(--bone-dim);
+}
+
+.boot__area-btn {
+  padding: 4px 10px;
+  cursor: pointer;
+}
