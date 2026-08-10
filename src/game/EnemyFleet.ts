@@ -64,7 +64,7 @@ export class EnemyFleet {
     const lengthScale = def.spec.length / BASE_LENGTH;
 
     const ship = new GameShip(wrapEnemyVisual(defId), {
-      maxHp: 50 + this.wave * 15,
+      maxHp: Math.round((50 + this.wave * 15) * 2.5), // 整体 ×2.5：拉长战斗，让 debuff 有时间发酵
       maxSpeed: 6.5 + this.wave * 0.4,
       turnRate: 0.55,
       cannons: 3,
