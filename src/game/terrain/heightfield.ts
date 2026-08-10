@@ -2,12 +2,14 @@
  * 海岸线 → 陆地掩码 → 高度场。
  *
  * 管线（全部在一张 GRID² 的网格上）：
- *   1. 把海岸线折线画成"墙"（canvas 1px 白线，全几何含 bbox 外段——跨边界
- *      的 way 必须画出去，墙才闭合）；
- *   2. 从画布四边洪水填充 = 海；够不着的 = 陆。墙有细缺口会漏，所以画两遍
- *      （1px + 2px 偏移）并在填充后做一次"海扩张"收口；
- *   3. 近似距离变换（两遍 chamfer）分别量"距海距离"（陆内）与"距陆距离"（海内）；
- *   4. 高度场：岸线 0，陆内按距海抬升（沙滩→丘陵），海内按距陆下沉（浅滩→深水），
+ *   1. 海岸线画墙（canvas 粗描边，全几何含 bbox 外段）；
+ *   2. 非墙像素 4 连通分区；
+ *   3. 对每条岸线段沿途采样，用叉积解析判定左右：左侧区域计"陆票"、
+ *      右侧计"海票"（OSM 约定：way 行进方向左侧是陆地），区域按多数票
+ *      定陆海。像素偏移画标记的旧法在锯齿海岸会跨墙渗漏，扫描线奇偶
+ *      法则扛不住断头岸线段——投票法对两者都鲁棒；
+ *   4. 近似距离变换（两遍 chamfer）分别量"距海距离"（陆内）与"距陆距离"（海内）；
+ *   5. 高度场：岸线 0，陆内按距海抬升（沙滩→丘陵），海内按距陆下沉（浅滩→深水），
  *      叠加少量确定性噪声。
  *
  * 坐标：网格 (i,j) ↔ 战场局部坐标（米，原点在区域中心）。lat/lon → 米用
@@ -48,6 +50,21 @@ function noise2(ix: number, iz: number): number {
 export function buildHeightField(bbox: BBox, lines: Coastline[]): HeightField {
   const G = GRID;
 
+  // 区域分类演进史：边界洪水（大陆岸误判）→ 像素偏移陆标（锯齿海岸跨墙渗漏）
+  // → 扫描线奇偶（断头岸线段污染整行）。当前版本：墙 + 连通区域 + 几何投票。
+  //
+  //   1. 海岸线画墙（粗描边，全几何含 bbox 外段）；
+  //   2. 非墙像素 4 连通分区；
+  //   3. 对每条岸线段沿途逐像素采样，取左右两侧 ~2px 处的区域 id：
+  //      左侧区域得"陆票"、右侧得"海票"（OSM 约定：way 行进方向左侧是陆地）。
+  //      用叉积解析判定左右，不画偏移线，锯齿/急弯/断头段都安全；
+  //   4. 区域按多数票定陆海；零票区域（理论上不与任何岸线相邻）：贴边=海，
+  //      封闭=海（潟湖），岛内部位从岸线段总能拿到陆票。
+  const toPx = (lat: number, lon: number): [number, number] => [
+    ((lon - bbox.w) / (bbox.e - bbox.w)) * (G - 1),
+    (1 - (lat - bbox.s) / (bbox.n - bbox.s)) * (G - 1),
+  ];
+
   // ---- 1. 画墙 ----
   const canvas = document.createElement('canvas');
   canvas.width = G;
@@ -57,11 +74,6 @@ export function buildHeightField(bbox: BBox, lines: Coastline[]): HeightField {
   ctx.fillRect(0, 0, G, G);
   ctx.strokeStyle = '#fff';
   ctx.lineCap = 'round';
-  // lon → i（西→东 = 左→右），lat → j（南→北 = 下→上，画布 y 翻转）
-  const toPx = (lat: number, lon: number): [number, number] => [
-    ((lon - bbox.w) / (bbox.e - bbox.w)) * (G - 1),
-    (1 - (lat - bbox.s) / (bbox.n - bbox.s)) * (G - 1),
-  ];
   for (const pass of [1.6, 2.6]) {
     ctx.lineWidth = pass;
     ctx.beginPath();
@@ -74,40 +86,84 @@ export function buildHeightField(bbox: BBox, lines: Coastline[]): HeightField {
     }
     ctx.stroke();
   }
-
-  // ---- 2. 四边洪水填充 = 海 ----
   const img = ctx.getImageData(0, 0, G, G).data;
   const wall = new Uint8Array(G * G);
   for (let i = 0; i < G * G; i++) wall[i] = img[i * 4] > 100 ? 1 : 0;
 
-  const sea = new Uint8Array(G * G);
-  const queue = new Int32Array(G * G);
-  let head = 0;
-  let tail = 0;
-  const push = (idx: number): void => {
-    if (sea[idx] || wall[idx]) return;
-    sea[idx] = 1;
-    queue[tail++] = idx;
-  };
-  for (let i = 0; i < G; i++) {
-    push(i);
-    push((G - 1) * G + i);
-    push(i * G);
-    push(i * G + G - 1);
-  }
-  while (head < tail) {
-    const idx = queue[head++];
-    const x = idx % G;
-    const z = (idx / G) | 0;
-    if (x > 0) push(idx - 1);
-    if (x < G - 1) push(idx + 1);
-    if (z > 0) push(idx - G);
-    if (z < G - 1) push(idx + G);
+  // ---- 2. 连通分区（非墙像素，4 连通） ----
+  const comp = new Int32Array(G * G).fill(-1);
+  const compTouchEdge: boolean[] = [];
+  const stack = new Int32Array(G * G);
+  for (let start = 0; start < G * G; start++) {
+    if (wall[start] || comp[start] >= 0) continue;
+    const id = compTouchEdge.length;
+    let touch = false;
+    let sp = 0;
+    stack[sp++] = start;
+    comp[start] = id;
+    while (sp > 0) {
+      const idx = stack[--sp];
+      const x = idx % G;
+      const z = (idx / G) | 0;
+      if (x === 0 || x === G - 1 || z === 0 || z === G - 1) touch = true;
+      if (x > 0 && !wall[idx - 1] && comp[idx - 1] < 0) { comp[idx - 1] = id; stack[sp++] = idx - 1; }
+      if (x < G - 1 && !wall[idx + 1] && comp[idx + 1] < 0) { comp[idx + 1] = id; stack[sp++] = idx + 1; }
+      if (z > 0 && !wall[idx - G] && comp[idx - G] < 0) { comp[idx - G] = id; stack[sp++] = idx - G; }
+      if (z < G - 1 && !wall[idx + G] && comp[idx + G] < 0) { comp[idx + G] = id; stack[sp++] = idx + G; }
+    }
+    compTouchEdge.push(touch);
   }
 
-  // 陆地掩码 = 不是海（墙像素归陆，视觉上岸线略鼓，无所谓）
+  // ---- 3. 左右侧投票 ----
+  const landVotes = new Int32Array(compTouchEdge.length);
+  const seaVotes = new Int32Array(compTouchEdge.length);
+  const compAt = (x: number, y: number): number => {
+    const ix = Math.round(x);
+    const iy = Math.round(y);
+    if (ix < 0 || iy < 0 || ix >= G || iy >= G) return -1;
+    return comp[iy * G + ix];
+  };
+  for (const line of lines) {
+    for (let k = 0; k + 3 < line.length; k += 2) {
+      const [x0, y0] = toPx(line[k], line[k + 1]);
+      const [x1, y1] = toPx(line[k + 2], line[k + 3]);
+      const dx = x1 - x0;
+      const dy = y1 - y0;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) continue;
+      // 画布坐标（x 东 y 南）的左法线：(dy, -dx)
+      const nx = (dy / len) * 2.2;
+      const ny = (-dx / len) * 2.2;
+      const steps = Math.max(1, Math.ceil(len));
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const px = x0 + dx * t;
+        const py = y0 + dy * t;
+        const left = compAt(px + nx, py + ny);
+        const right = compAt(px - nx, py - ny);
+        if (left >= 0) landVotes[left]++;
+        if (right >= 0) seaVotes[right]++;
+      }
+    }
+  }
+
+  // ---- 4. 多数票定陆海 ----
+  console.info(
+    `[terrain] 分区 ${compTouchEdge.length}，陆票 ${[...landVotes].reduce((a, b) => a + b, 0)}，` +
+      `海票 ${[...seaVotes].reduce((a, b) => a + b, 0)}`,
+  );
   const landMask = new Uint8Array(G * G);
-  for (let i = 0; i < G * G; i++) landMask[i] = sea[i] ? 0 : 1;
+  for (let i = 0; i < G * G; i++) {
+    if (wall[i]) {
+      landMask[i] = 1; // 墙像素归陆（岸线略鼓，视觉无所谓）
+      continue;
+    }
+    const c = comp[i];
+    const land = landVotes[c] > 0 || seaVotes[c] > 0
+      ? landVotes[c] > seaVotes[c]
+      : false; // 零票 = 海（贴边大洋 / 封闭潟湖都不与岸线直接相邻时）
+    landMask[i] = land ? 1 : 0;
+  }
 
   return buildFieldFromMask(bbox, landMask);
 }

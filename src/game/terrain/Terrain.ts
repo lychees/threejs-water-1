@@ -11,6 +11,9 @@ import * as THREE from 'three/webgpu';
 import { fetchCoastlines, type BBox } from './overpass';
 import { buildHeightField, buildFieldFromMask, sampleHeight, GRID, type HeightField } from './heightfield';
 
+// 测试钩子（与 __game/__ocean 同待遇）：分类器可用合成海岸线直接单测。
+(window as unknown as { __terrainBuild: typeof buildHeightField }).__terrainBuild = buildHeightField;
+
 /** 区域中心（世界坐标）。迷雾岛在 (-1150,-780)，原点在高原浅水区，这里两边都不沾。 */
 export const CUSTOM_CENTER = { x: 6000, z: 6000 };
 
@@ -25,7 +28,9 @@ export class Terrain {
   }
 
   static async load(bbox: BBox): Promise<Terrain> {
-    const cacheKey = `web-ocean:terrain-mask:v1:${bbox.s},${bbox.w},${bbox.n},${bbox.e}`;
+    // v2：海陆分类算法改为陆侧标记（v1 的边界洪水法在大陆海岸选区会把陆判成海），
+    // 旧缓存掩码一律作废。
+    const cacheKey = `web-ocean:terrain-mask:v2:${bbox.s},${bbox.w},${bbox.n},${bbox.e}`;
 
     // 缓存命中：跳过 Overpass，直接从海陆掩码重建高度场（确定性，结果一致）
     let cachedMask: Uint8Array | null = null;
