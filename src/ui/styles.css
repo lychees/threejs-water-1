@@ -1951,3 +1951,24 @@ body {
   padding: 4px 10px;
   cursor: pointer;
 }
+
+/* 自定义海域生成进度提示 */
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 12vh;
+  transform: translateX(-50%);
+  z-index: 60;
+  background: rgba(10, 14, 18, 0.82);
+  color: #e8e2d5;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  padding: 10px 18px;
+  font-size: 14px;
+  transition: opacity 0.6s;
+  pointer-events: none;
+}
+
+.app-toast--out {
+  opacity: 0;
+}

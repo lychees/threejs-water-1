@@ -50,7 +50,12 @@ export class Minimap {
     const ctx = this.ctx;
     const W = this.canvas.width;
     const cx = W / 2;
-    const range = this.large ? 600 : 400; // 海图半径（米）
+    // 海图半径（米）：自定义海域放大地图 = 全区域鸟瞰，默认海域 600m
+    const range = this.large
+      ? this.terrain
+        ? Math.max(this.terrain.sizeX, this.terrain.sizeZ) / 2
+        : 600
+      : 400;
     const s = (cx - 8) / range;
     const px = player.position.x;
     const pz = player.position.z;

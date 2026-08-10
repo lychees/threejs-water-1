@@ -1244,12 +1244,21 @@ class App {
       let terrain: Terrain | null = null;
       const bbox = resolveBBox();
       if (bbox) {
+        // 自定义海域生成可能要走多个 Overpass 镜像（单站常 504），给用户明确反馈
+        const toast = document.createElement('div');
+        toast.className = 'app-toast';
+        toast.textContent = '🗺️ 正在从 OpenStreetMap 生成自定义海域…';
+        document.body.append(toast);
         try {
           terrain = await Terrain.load(bbox);
           console.info(`[terrain] 自定义海域就绪（${bbox.s},${bbox.w} ~ ${bbox.n},${bbox.e}）`);
+          toast.textContent = '🗺️ 自定义海域已生成！';
         } catch (error) {
           console.warn('[terrain] 自定义海域生成失败，回退默认战场：', error);
+          toast.textContent = `⚠️ 自定义海域生成失败（${error instanceof Error ? error.message : error}），使用默认迷雾岛战场`;
         }
+        setTimeout(() => toast.classList.add('app-toast--out'), 3600);
+        setTimeout(() => toast.remove(), 4200);
       }
       if (this.disposed) return;
       this.game = new Game({

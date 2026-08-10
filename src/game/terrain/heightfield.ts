@@ -46,7 +46,6 @@ function noise2(ix: number, iz: number): number {
 }
 
 export function buildHeightField(bbox: BBox, lines: Coastline[]): HeightField {
-  const { sizeX, sizeZ } = bboxSizeMeters(bbox);
   const G = GRID;
 
   // ---- 1. 画墙 ----
@@ -109,6 +108,14 @@ export function buildHeightField(bbox: BBox, lines: Coastline[]): HeightField {
   // 陆地掩码 = 不是海（墙像素归陆，视觉上岸线略鼓，无所谓）
   const landMask = new Uint8Array(G * G);
   for (let i = 0; i < G * G; i++) landMask[i] = sea[i] ? 0 : 1;
+
+  return buildFieldFromMask(bbox, landMask);
+}
+
+/** 由陆地掩码重建高度场（距离变换 + 高程 + 噪声），缓存命中时免拉 Overpass。 */
+export function buildFieldFromMask(bbox: BBox, landMask: Uint8Array): HeightField {
+  const { sizeX, sizeZ } = bboxSizeMeters(bbox);
+  const G = GRID;
 
   // ---- 3. chamfer 距离变换（陆：距海；海：距陆） ----
   const distToSea = chamfer(landMask, 1, G); // 陆格 → 距最近海格

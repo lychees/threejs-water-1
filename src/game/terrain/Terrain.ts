@@ -9,7 +9,7 @@
 
 import * as THREE from 'three/webgpu';
 import { fetchCoastlines, type BBox } from './overpass';
-import { buildHeightField, sampleHeight, GRID, type HeightField } from './heightfield';
+import { buildHeightField, buildFieldFromMask, sampleHeight, GRID, type HeightField } from './heightfield';
 
 /** 区域中心（世界坐标）。迷雾岛在 (-1150,-780)，原点在高原浅水区，这里两边都不沾。 */
 export const CUSTOM_CENTER = { x: 6000, z: 6000 };
@@ -25,10 +25,45 @@ export class Terrain {
   }
 
   static async load(bbox: BBox): Promise<Terrain> {
-    const { lines, nodeCount } = await fetchCoastlines(bbox);
-    if (lines.length === 0) throw new Error('该区域没有海岸线数据');
-    console.info(`[terrain] 海岸线 ${lines.length} 条 / ${nodeCount} 节点，开始光栅化`);
-    const field = buildHeightField(bbox, lines);
+    const cacheKey = `web-ocean:terrain-mask:v1:${bbox.s},${bbox.w},${bbox.n},${bbox.e}`;
+
+    // 缓存命中：跳过 Overpass，直接从海陆掩码重建高度场（确定性，结果一致）
+    let cachedMask: Uint8Array | null = null;
+    try {
+      const raw = window.localStorage.getItem(cacheKey);
+      if (raw) {
+        const bin = atob(raw);
+        if (bin.length === GRID * GRID) {
+          cachedMask = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) cachedMask[i] = bin.charCodeAt(i);
+        }
+      }
+    } catch {
+      cachedMask = null;
+    }
+
+    let field;
+    if (cachedMask) {
+      console.info('[terrain] 命中本地缓存，跳过 Overpass');
+      field = buildFieldFromMask(bbox, cachedMask);
+    } else {
+      const { lines, nodeCount } = await fetchCoastlines(bbox);
+      if (lines.length === 0) throw new Error('该区域没有海岸线数据');
+      console.info(`[terrain] 海岸线 ${lines.length} 条 / ${nodeCount} 节点，开始光栅化`);
+      field = buildHeightField(bbox, lines);
+      // 写缓存（147KB 掩码 → ~196KB base64，放得下 localStorage；写失败不碍事）
+      try {
+        let bin = '';
+        const CHUNK = 32768;
+        for (let i = 0; i < field.landMask.length; i += CHUNK) {
+          bin += String.fromCharCode(...field.landMask.subarray(i, i + CHUNK));
+        }
+        window.localStorage.setItem(cacheKey, btoa(bin));
+      } catch {
+        // 存储满了就算了，下次再拉
+      }
+    }
+
     //  sanity：全陆或全海都不是战场
     let land = 0;
     for (let i = 0; i < field.landMask.length; i++) land += field.landMask[i];
@@ -53,19 +88,22 @@ export class Terrain {
     return this.heightWorld(x, z) > 0;
   }
 
-  /** 出生点：区域内距岸足够远的深水的 pseudo-random 候选中挑一个最深的。 */
+  /** 出生点：距岸 ~80~150m 的可航浅水外缘（水深 -6 ~ -12m），进门就能看到生成的岛屿。 */
   findSpawn(): THREE.Vector3 {
     let best: THREE.Vector3 | null = null;
-    let bestDepth = -Infinity;
-    for (let i = 0; i < 400; i++) {
-      const x = (Math.random() - 0.5) * this.field.sizeX * 0.8;
-      const z = (Math.random() - 0.5) * this.field.sizeZ * 0.8;
+    let bestScore = Infinity;
+    for (let i = 0; i < 600; i++) {
+      const x = (Math.random() - 0.5) * this.field.sizeX * 0.9;
+      const z = (Math.random() - 0.5) * this.field.sizeZ * 0.9;
       const h = this.height(x, z);
-      if (h < -8 && -h > bestDepth) {
-        bestDepth = -h;
+      if (h > -6 || h < -12) continue; // 太浅会搁浅，太深就看不见岸
+      const score = Math.abs(h + 8); // 最接近 8m 水深
+      if (score < bestScore) {
+        bestScore = score;
         best = new THREE.Vector3(x + this.center.x, 0, z + this.center.z);
       }
     }
+    // 兜底：全非海岸区域（纯海）退回中心
     return best ?? new THREE.Vector3(this.center.x, 0, this.center.z);
   }
 
