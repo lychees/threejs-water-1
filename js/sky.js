@@ -1,6 +1,6 @@
 // 天空：渐变穹顶（TSL NodeMaterial）+ 太阳/光照 + 云
 import * as THREE from 'three';
-import { Fn, uniform, normalize, pow, max, mix, dot, smoothstep, positionLocal } from 'three/tsl';
+import { Fn, uniform, normalize, pow, max, mix, dot, smoothstep, positionWorld, cameraPosition } from 'three/tsl';
 
 // 太阳方向（初始值；daytime.js 每帧通过 uniform 更新）
 export const SUN_DIR = new THREE.Vector3(-0.55, 0.38, -0.74).normalize();
@@ -55,18 +55,21 @@ export function createSky(scene) {
   scene.fog = new THREE.Fog(SKY_COLORS.horizon.getHex(), 90, 460);
 
   // 天空穹顶（TSL；海平面以下略压暗防穿帮）
+  // 注意：fragment 里必须用 positionWorld（官方 SkyMesh 同款取法）；
+  // positionLocal 是顶点属性，WGSL 片元阶段不可用——曾导致整片天空输出黑
   const skyColor = makeSkyColor(SKY_UNIFORMS);
   const skyMat = new THREE.NodeMaterial({ side: THREE.BackSide, depthWrite: false });
   skyMat.fog = false;
   skyMat.colorNode = Fn(() => {
-    const d = normalize(positionLocal);
+    const d = normalize(positionWorld.sub(cameraPosition));
     const col = skyColor(d).toVar();
-    // 海平面以下压暗防穿帮
-    col.assign(mix(col, SKY_UNIFORMS.uHorizon.mul(0.85), smoothstep(0.0, -0.15, d.y)));
+    // 海平面以下压暗防穿帮（WGSL smoothstep 要求 low < high，用取反写法）
+    col.assign(mix(col, SKY_UNIFORMS.uHorizon.mul(0.85), smoothstep(0.0, 0.15, d.y.negate())));
     return col;
   })();
 
   const skyDome = new THREE.Mesh(new THREE.SphereGeometry(880, 24, 16), skyMat);
+  skyDome.frustumCulled = false; // 保险：大穹顶永不被剔除
   scene.add(skyDome);
 
   // 光照：暖阳平行光 + 半球环境光
