@@ -110,7 +110,7 @@ export class EnemyFleet {
       // 开火：舷侧大致对准玩家且进入射程
       e.cooldown -= dt;
       if (e.cooldown <= 0 && dist < 52) {
-        const starboard = new THREE.Vector3(Math.cos(e.heading), 0, -Math.sin(e.heading));
+        const starboard = new THREE.Vector3(-Math.cos(e.heading), 0, Math.sin(e.heading)); // 与 combat 舷侧约定一致
         const dot = starboard.dot(toP.clone().normalize());
         if (Math.abs(dot) > 0.72) {
           // 精度一般：散布大、无提前量，给玩家躲避空间

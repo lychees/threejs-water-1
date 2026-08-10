@@ -109,8 +109,8 @@ export class Combat {
    */
   fireBroadside(ship, side, opts = {}) {
     const { count = ship.cannons ?? 3, speed = 30, spread = 0.06, fromPlayer = true, damageMul = 1 } = opts;
-    // 舷侧方向：右舷 = (cos h, 0, -sin h)
-    const dir = new THREE.Vector3(side * Math.cos(ship.heading), 0, -side * Math.sin(ship.heading));
+    // 舷侧方向：右舷 = (-cos h, 0, sin h)（three.js 右手系 Y 向上，朝 +Z 航行时屏幕右为 -X）
+    const dir = new THREE.Vector3(-side * Math.cos(ship.heading), 0, side * Math.sin(ship.heading));
     const fwd = ship.forward;
 
     for (let i = 0; i < count; i++) {

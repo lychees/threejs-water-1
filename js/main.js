@@ -547,7 +547,7 @@ let touchTurn = 0; // 摇杆横轴转向输入（-1 ~ 1）
     const len = Math.hypot(dx, dy);
     if (len > r) { dx = (dx / len) * r; dy = (dy / len) * r; }
     knob.style.transform = `translate(${dx}px, ${dy}px)`;
-    touchTurn = dx / r; // 右转为正
+    touchTurn = -dx / r; // 摇杆右推 = 右转（turn 为正即左转）
     // 纵轴直接映射连续帆量：上推幅度 = 帆量，下推到底进入倒车，回中保持当前值
     const fy = dy / r;
     if (state === 'playing' && camMode !== 3) {
@@ -775,8 +775,8 @@ function updateFanViz(mesh, charge, side, time) {
     sz = pp.z + Math.cos(player.heading) * 4.2 * ls;
     vy = 2.5; h0 = 1.4; baseSpeed = BOW_SPEED; halfAng = FAN_HALF_ANGLE_BOW;
   } else {
-    const dx = side * Math.cos(player.heading);
-    const dz = -side * Math.sin(player.heading);
+    const dx = -side * Math.cos(player.heading); // 舷侧方向与 combat.fireBroadside 同约定
+    const dz = side * Math.sin(player.heading);
     dirAng = Math.atan2(dx, dz);
     sx = pp.x + dx * 1.5;
     sz = pp.z + dz * 1.5;
@@ -990,7 +990,7 @@ function updateCamera(dt, time) {
       Math.sin(fly.pitch),
       Math.cos(fly.yaw) * Math.cos(fly.pitch)
     );
-    const right = new THREE.Vector3(Math.cos(fly.yaw), 0, -Math.sin(fly.yaw));
+    const right = new THREE.Vector3(-Math.cos(fly.yaw), 0, Math.sin(fly.yaw)); // 屏幕右 = (-cos, 0, sin)
     const move = new THREE.Vector3();
     if (keys['KeyW']) move.add(dir);
     if (keys['KeyS']) move.sub(dir);
@@ -1178,8 +1178,8 @@ renderer.setAnimationLoop(() => {
     const targetSpeed = sailAmount * player.maxSpeed * weather.speedMul * player.speedMul; // 天气+debuff 双乘区
     player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
     let turn = 0;
-    if (keys['KeyA']) turn -= 1;
-    if (keys['KeyD']) turn += 1;
+    if (keys['KeyA']) turn += 1; // A = 左转（heading 增大即向屏幕左）
+    if (keys['KeyD']) turn -= 1;
     turn += touchTurn; // 触屏摇杆转向
     // 舵是翼面：舵效 ∝ 航速（低速几乎转不动），倒车时舵效反向
     const speedRatio = Math.min(1, Math.abs(player.speed) / player.maxSpeed);
