@@ -2,6 +2,7 @@ import * as THREE from 'three/webgpu';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
+import { assetUrl } from '../core/paths';
 
 /**
  * Caching glTF loader.
@@ -38,7 +39,7 @@ import { KTX2Loader } from 'three/addons/loaders/KTX2Loader.js';
  * runtime dependency to an otherwise self-contained build.
  */
 
-const BASIS_TRANSCODER_PATH = '/basis/';
+const BASIS_TRANSCODER_PATH = assetUrl('/basis/');
 const DEFAULT_TIMEOUT_MS = 30_000;
 
 /**
@@ -60,7 +61,7 @@ export async function fetchWithDeadline(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { signal: controller.signal });
+    return await fetch(assetUrl(url), { signal: controller.signal });
   } catch (error) {
     if (controller.signal.aborted) {
       throw new Error(`Request timed out after ${timeoutMs} ms: ${url}`);
@@ -242,6 +243,7 @@ export class AssetLoader {
   async load(url: string, options: AssetLoadOptions = {}): Promise<THREE.Group> {
     if (this.disposed) throw new Error(`AssetLoader disposed; cannot load ${url}`);
 
+    url = assetUrl(url);
     let pending = this.cache.get(url);
     if (!pending) {
       const controller = new AbortController();

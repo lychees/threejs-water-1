@@ -11,6 +11,7 @@ import {
   vec3,
 } from 'three/tsl';
 import { fetchWithDeadline, withDeadline } from './AssetLoader';
+import { assetUrl } from '../core/paths';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Node = any;
@@ -135,7 +136,7 @@ export class Imposters {
       throw new Error(`Unsupported imposter sidecar schema: ${String(sidecar.schema)}`);
     }
 
-    const textureUrl = options.textureUrl ?? `/${sidecar.atlas.file.replace(/^\/+/, '')}`;
+    const textureUrl = options.textureUrl ?? assetUrl(sidecar.atlas.file);
     const atlas = await withDeadline(
       new THREE.TextureLoader().loadAsync(textureUrl),
       textureUrl,
