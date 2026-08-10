@@ -40,6 +40,7 @@ import { DEFAULT_SSR_STEPS, ScreenSpaceReflection } from './ocean/ScreenSpaceRef
 import { OceanSampler } from './ocean/Sampler';
 import { DEFAULT_SPECTRUM, significantWaveHeight } from './ocean/Spectrum';
 import { AerialPerspective, Atmosphere, Clouds, Weather } from './sky';
+import { Phenomena } from './sky/Phenomena';
 import { VolumetricFog } from './post/VolumetricFog';
 import { LensRain } from './post/LensRain';
 import { ColorGrade } from './post/ColorGrade';
@@ -182,6 +183,8 @@ class App {
   private readonly uKeyColor: any = uniform(new THREE.Color(1, 1, 1));
   private clouds!: Clouds;
   private weather!: Weather;
+  /** 雾团/彩虹/极光/流星。 */
+  private phenomena!: Phenomena;
   /** Gulls over the play area. Owns no simulation state — see `Birds`. */
   private birds!: Birds;
   private spray!: Spray;
@@ -556,6 +559,10 @@ class App {
 
     this.weather = new Weather();
     this.scene.add(this.weather.object);
+
+    // 天空现象层（雾团/彩虹/极光/流星）：每帧由 update 喂环境状态，见 2209 行附近。
+    this.phenomena = new Phenomena();
+    this.scene.add(this.phenomena.object);
 
     // Birds go in with the sky rather than with the props: they are lit by the
     // atmosphere and nothing else, and they never touch the water.
@@ -1233,6 +1240,8 @@ class App {
         shipStats,
         isRaining: () =>
           this.weather.getKind() === 'rain' && this.weather.getIntensity() > 0.05,
+        isSnowing: () =>
+          this.weather.getKind() === 'snow' && this.weather.getIntensity() > 0.05,
         heightAt: (x, z) => this.sampler.height(x, z),
       });
 
@@ -2333,6 +2342,20 @@ class App {
     const surface = this.sampler.height(this.camera.position.x, this.camera.position.z);
     const preset = getPreset(this.state.preset);
 
+    // 天空现象层：雾团跟预设雾量、彩虹跟雨停、极光跟夜+moonlit/arctic、流星跟晴夜
+    this.phenomena.cameraQuaternion = this.camera.quaternion;
+    this.phenomena.update(dt, {
+      cameraPosition: this.camera.position,
+      sunDirection: this.atmosphere.sunDirection,
+      weatherKind: this.weather.getKind(),
+      weatherIntensity: this.weather.getIntensity(),
+      fogVolumetric: preset.fog.volumetric,
+      presetId: this.state.preset,
+      windDirection: preset.sea.windDirection,
+      windSpeed: this.state.windSpeed,
+      particleScale: QUALITY_TIERS[this.state.quality].propsDetail >= 0.75 ? 1 : 0.5,
+    });
+
     this.underwater.setParams({
       submersion,
       // Signed, and the sign is the point: it tells the pass which side of the
@@ -2648,6 +2671,8 @@ class App {
         loop: this.loop,
         backend: this.backend,
         wake: this.wake,
+        /** 天空现象层，供测试直接触发流星/读雾团强度。 */
+        phenomena: this.phenomena,
         water: this.water,
         /**
          * Readiness signals. `sceneContentLoaded` settles whether or not the

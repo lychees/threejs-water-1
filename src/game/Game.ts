@@ -64,6 +64,8 @@ export interface GameOptions {
   shipStats: Record<number, ShipStats>;
   /** 基座天气：大雨（rain 且有一定强度）时灭火、不新附着火、全船减速。 */
   isRaining: () => boolean;
+  /** 下雪（arctic）：轻度减速，不灭火。 */
+  isSnowing: () => boolean;
   heightAt: WaveHeightAt;
 }
 
@@ -79,6 +81,7 @@ export class Game {
   private readonly camera: THREE.PerspectiveCamera;
   private readonly heightAt: WaveHeightAt;
   private readonly isRaining: () => boolean;
+  private readonly isSnowing: () => boolean;
   private readonly abort = new AbortController();
 
   private readonly fanL: THREE.Mesh;
@@ -133,6 +136,7 @@ export class Game {
     this.heightAt = options.heightAt;
     this.audio = options.audio;
     this.isRaining = options.isRaining;
+    this.isSnowing = options.isSnowing;
     this.playerBase = options.player;
 
     // 游戏接管主船：基座的力模型控制器保持停用，浮力由 GameShip 自己采样。
@@ -321,7 +325,8 @@ export class Game {
     const player = this.player;
     // 大雨：灭火 + 不新附着火（onHit 的 skipFire）+ 全船减速
     const raining = this.isRaining();
-    const weatherSpeedMul = raining ? 0.9 : 1;
+    // 雨天大减速、雪天小减速
+    const weatherSpeedMul = raining ? 0.9 : this.isSnowing() ? 0.95 : 1;
     this.fleet.weatherSpeedMul = weatherSpeedMul;
 
     // 任意死因（炮火/撞击/着火）都进 Game Over

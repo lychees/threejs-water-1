@@ -253,9 +253,10 @@ export class Weather {
     );
 
     // Lateral wobble: two out-of-phase oscillators give a convincing tumble.
+    // （B3 天气增强：振幅 0.55→0.8，飘感更明显）
     const phase = seed.w.mul(43.0);
-    const wobbleX = sin(this.uTime.mul(0.55).add(phase)).mul(0.55);
-    const wobbleZ = cos(this.uTime.mul(0.41).add(phase.mul(1.7))).mul(0.55);
+    const wobbleX = sin(this.uTime.mul(0.55).add(phase)).mul(0.8);
+    const wobbleZ = cos(this.uTime.mul(0.41).add(phase.mul(1.7))).mul(0.8);
 
     const x = seed.x.sub(0.5).mul(SNOW_RADIUS * 2).add(wobbleX).add(y.mul(0.06));
     const z = seed.y.sub(0.5).mul(SNOW_RADIUS * 2).add(wobbleZ);

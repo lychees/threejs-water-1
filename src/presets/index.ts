@@ -284,7 +284,7 @@ export const PRESETS: Record<PresetId, Preset> = {
       color: color(0xeaf3ff),
       shadowColor: color(0x9db4cc),
     },
-    weather: { kind: 'snow', intensity: 0.45 },
+    weather: { kind: 'snow', intensity: 0.65 },
     sea: {
       windSpeed: 11,
       windDirection: Math.PI * 0.8,
