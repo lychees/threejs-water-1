@@ -56,6 +56,7 @@ export interface RawShipData {
   power: number;
   tacking: number;
   maximumGuns: number;
+  basePrice?: number;
 }
 
 export interface ShipStats {
@@ -63,6 +64,8 @@ export interface ShipStats {
   maxSpeed: number;
   turnRate: number;
   cannons: number;
+  /** 原作价格（金币），仅用于选船界面排序与展示；ships.json 缺失时为 0 */
+  price?: number;
 }
 
 export interface ShipVisual {
@@ -78,6 +81,7 @@ export function computeStats(raw: RawShipData): ShipStats {
     maxSpeed: raw.power * 0.2, // 12 ~ 20
     turnRate: raw.tacking / 70, // 0.71 ~ 1.43
     cannons: Math.min(6, Math.max(2, Math.round(raw.maximumGuns / 15))), // 2 ~ 6
+    price: raw.basePrice ?? 0,
   };
 }
 export const FALLBACK_STATS: ShipStats = { hp: 100, maxSpeed: 15, turnRate: 1.0, cannons: 3 };

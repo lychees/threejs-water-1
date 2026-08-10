@@ -78,6 +78,8 @@ export function buildShipSelect(): HTMLElement {
   let selected = resolveShipId();
   const barsByDef = new Map<number, Map<keyof ShipStats, HTMLElement>>();
   const thumbByDef = new Map<number, HTMLElement>();
+  const cardByDef = new Map<number, HTMLElement>();
+  const priceByDef = new Map<number, HTMLElement>();
   const cards: HTMLElement[] = [];
 
   for (const def of SHIP_DEFS) {
@@ -102,7 +104,11 @@ export function buildShipSelect(): HTMLElement {
     const en = document.createElement('span');
     en.className = 'shipselect__en';
     en.textContent = def.en;
-    card.append(name, en);
+    const price = document.createElement('span');
+    price.className = 'shipselect__price';
+    priceByDef.set(def.id, price);
+    card.append(name, en, price);
+    cardByDef.set(def.id, card);
 
     const bars = new Map<keyof ShipStats, HTMLElement>();
     for (const [key, labelText] of STAT_LABELS) {
@@ -135,7 +141,7 @@ export function buildShipSelect(): HTMLElement {
     grid.append(card);
   }
 
-  // 先用基准属性铺底，ships.json 到了再刷成真实比例
+  // 先用基准属性铺底，ships.json 到了再刷成真实比例并按价格重排
   const paint = (stats: Record<number, ShipStats>): void => {
     for (const def of SHIP_DEFS) {
       const s = stats[def.id] ?? FALLBACK_STATS;
@@ -145,6 +151,16 @@ export function buildShipSelect(): HTMLElement {
         const ratio = Math.min(1, s[key] / STAT_MAX[key]);
         bars.get(key)!.style.width = `${Math.round(ratio * 100)}%`;
       }
+      const priceEl = priceByDef.get(def.id);
+      if (priceEl) priceEl.textContent = s.price ? `💰 ${s.price.toLocaleString()}` : '';
+    }
+    // 按价格升序重排卡片（append 已有节点 = 移动，选中态跟随 DOM 不受影响）
+    const sorted = [...SHIP_DEFS].sort(
+      (a, b) => (stats[a.id]?.price ?? 0) - (stats[b.id]?.price ?? 0),
+    );
+    for (const def of sorted) {
+      const card = cardByDef.get(def.id);
+      if (card) grid.append(card);
     }
   };
   paint(Object.fromEntries(SHIP_DEFS.map((d) => [d.id, FALLBACK_STATS])));

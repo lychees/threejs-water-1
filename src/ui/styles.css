@@ -1686,6 +1686,14 @@ body {
   margin-bottom: 4px;
 }
 
+.shipselect__price {
+  display: block;
+  font-size: 10px;
+  color: #ffd76e;
+  margin-bottom: 4px;
+  min-height: 12px; /* 数据未到时占位，避免加载后卡片跳动 */
+}
+
 .shipselect__stat {
   display: flex;
   align-items: center;
