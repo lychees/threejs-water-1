@@ -465,13 +465,18 @@ export class CameraDirector {
     // Sit behind and above the target, looking slightly down at it — with the
     // viewer's orbit applied on top of the hull's own bearing, so the rig keeps
     // following while the camera can point anywhere.
+    //
+    // 阶段 B1 修正：`heading` 的约定是 atan2(forward.z, forward.x)（见
+    // scene/Ship.heading），船头方向是 (cos h, 0, sin h)。原来这里用
+    // (sin, cos) 取“船尾方向”，与约定差 90°，镜头永远停在船的正横而非
+    // 船尾——观光可以，掌舵瞄准不行。改回与约定一致的 (cos, sin)。
     const bearing = this.target.heading + this.chaseYaw;
     const lift = CHASE_HEIGHT / CHASE_DISTANCE + this.chasePitch;
     const planar = Math.cos(Math.atan(lift));
     const back = this.tmpVec.set(
-      Math.sin(bearing) * planar,
-      0,
       Math.cos(bearing) * planar,
+      0,
+      Math.sin(bearing) * planar,
     );
     this.desiredPosition
       .copy(this.target.position)

@@ -1440,3 +1440,175 @@ body {
     transition: opacity 0.4s linear;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Game HUD (阶段 B1 海战)
+
+   同一套 Tide Table 规则：不透明底、方角、发丝线、单一红色只给要害。
+   -------------------------------------------------------------------------- */
+
+.ghud-root {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  font-family: var(--font-instrument);
+  color: var(--bone);
+  z-index: 30;
+}
+
+.ghud {
+  position: absolute;
+  background: var(--ink);
+  border: 1px solid var(--rule);
+  padding: 10px 12px;
+}
+
+.ghud--status {
+  left: var(--gutter);
+  bottom: var(--gutter);
+  width: 220px;
+}
+
+.ghud--score {
+  right: var(--gutter);
+  top: var(--gutter);
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+
+.ghud__num {
+  color: var(--red);
+  font-weight: 700;
+}
+
+.ghud__bar {
+  height: 8px;
+  background: var(--ink-deep);
+  border: 1px solid var(--rule-soft);
+  margin: 4px 0;
+}
+
+.ghud__fill {
+  height: 100%;
+  width: 100%;
+  transition: width 0.15s linear;
+}
+
+.ghud__fill--hp {
+  background: var(--red);
+}
+
+.ghud__fill--reload {
+  background: var(--bone-dim);
+}
+
+.ghud__sail {
+  font-size: 11px;
+  color: var(--bone-dim);
+  margin: 6px 0 2px;
+}
+
+.ghud__reload {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--bone-dim);
+}
+
+.ghud__reload-label {
+  width: 44px;
+  flex: none;
+}
+
+.ghud__reload .ghud__bar {
+  flex: 1;
+  margin: 2px 0;
+}
+
+.ghud__float {
+  position: absolute;
+  left: 50%;
+  bottom: 18%;
+  transform: translateX(-50%);
+  font-size: 15px;
+  color: var(--bone);
+  text-shadow: 0 1px 2px var(--ink-deep);
+  animation: ghud-float 1.5s ease-out forwards;
+}
+
+.ghud__float--at {
+  bottom: auto;
+  transform: translate(-50%, -100%);
+  font-weight: 700;
+}
+
+@keyframes ghud-float {
+  0% { opacity: 0; margin-top: 0; }
+  12% { opacity: 1; }
+  100% { opacity: 0; margin-top: -46px; }
+}
+
+.ghud__ehp {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  width: 72px;
+  text-align: center;
+}
+
+.ghud__ehp-name {
+  font-size: 10px;
+  color: var(--bone-dim);
+  text-shadow: 0 1px 2px var(--ink-deep);
+}
+
+.ghud__ehp-bar {
+  height: 5px;
+  background: color-mix(in srgb, var(--ink-deep) 72%, transparent);
+  border: 1px solid var(--rule-soft);
+}
+
+.ghud__ehp-fill {
+  height: 100%;
+  background: var(--red);
+}
+
+.ghud__over {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--ink-deep) 62%, transparent);
+}
+
+.ghud__over.is-hidden {
+  display: none;
+}
+
+.ghud__over-box {
+  background: var(--ink);
+  border: 1px solid var(--rule);
+  border-top: 3px double var(--red);
+  padding: 28px 48px;
+  text-align: center;
+}
+
+.ghud__over-title {
+  font-family: var(--font-voice);
+  font-size: 34px;
+  letter-spacing: 0.3em;
+  margin-bottom: 10px;
+}
+
+.ghud__over-line {
+  font-size: 14px;
+  color: var(--bone-dim);
+  margin-bottom: 14px;
+}
+
+.ghud__over-hint {
+  font-size: 12px;
+  color: var(--red);
+  letter-spacing: 0.12em;
+}

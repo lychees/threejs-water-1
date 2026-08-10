@@ -47,10 +47,12 @@ const HINTS: Record<CameraMode, readonly Hint[]> = {
   // Reverse is real, though: S astern of a stop backs the ship, and the rudder
   // reverses with it.
   boat: [
-    { action: 'Throttle', key: 'W S' },
+    { action: 'Sail', key: 'W S' },
     { action: 'Steer', key: 'A D' },
+    { action: 'Port broadside', key: 'Q / LMB' },
+    { action: 'Starboard', key: 'E / RMB' },
+    { action: 'Bow gun', key: 'Space' },
     { action: 'Look', key: 'Drag' },
-    { action: 'Zoom', key: 'Scroll' },
   ],
   // Nothing to drive — the flight holds the wheel. The hint names what the
   // viewer *can* do, which is leave, rather than listing controls that are

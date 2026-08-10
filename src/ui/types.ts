@@ -76,7 +76,8 @@ export const DEFAULT_UI_STATE: UiState = {
   wakeProbes: false,
   forceWebGL: false,
   pixelRatio: 1,
-  cameraMode: 'orbit',
+  // 阶段 B1：进入即掌舵（海战玩法默认）。
+  cameraMode: 'boat',
 };
 
 export const QUALITY_TIERS: readonly QualityTier[] = ['low', 'medium', 'high', 'ultra', 'max'];

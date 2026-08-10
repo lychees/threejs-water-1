@@ -61,6 +61,7 @@ import { StormQuote } from './ui/Quote';
 import { TouchControls } from './ui/TouchControls';
 import { DEFAULT_UI_STATE, type UiState } from './ui/types';
 import { openStartGate, type StartSelection } from './ui/StartGate';
+import { Game } from './game/Game';
 import { inject } from '@vercel/analytics';
 
 // Vercel Web Analytics, and only where Vercel is actually serving it.
@@ -241,6 +242,8 @@ class App {
   private wake!: Wake;
   private shipBody: BuoyantBody | null = null;
   private shipControls: ShipController | null = null;
+  /** 海战玩法（阶段 B1）。非空时主船由游戏的运动模型驱动，基座力模型停用。 */
+  private game: Game | null = null;
   /** Rain wetting for the ship and the floating props. */
   private readonly wetness = new SurfaceWetness();
 
@@ -827,6 +830,9 @@ class App {
       domElement: this.canvas,
       surfaceHeight: (x, z) => this.sampler.height(x, z),
     });
+    // 初始相机模式（B1 默认 boat/掌舵）要推给 director：它构造时总是 orbit，
+    // 而 onStateChange 只在“变化”时触发，默认值的这一下没有人发。
+    this.director.setMode(this.state.cameraMode);
 
     this.buildUi();
     this.applyPreset();
@@ -1211,7 +1217,9 @@ class App {
         horizontalDamping: 0.03,
         horizontalDrag: 0,
       });
-      this.buoyancy.add(this.shipBody);
+      // 阶段 B1：主船的运动交给 Game 的街机模型（旧版手感），不进基座的
+      // 浮力解算——否则两套积分器会同时写 ship.object 的变换。
+      // shipBody 仍创建，仅供确定性采集等基座工具读取姿态。
 
       // The controller exists from load but stays inert until Boat mode selects
       // it, so W/S and A/D cannot steer a ship the viewer is not driving.
@@ -1226,6 +1234,18 @@ class App {
       // therefore born with the keyboard live, and holding S once the ship
       // appeared drove it straight through the tour.
       this.applyShipControlMode();
+
+      // 海战玩法接管主船（内部会停用 shipControls）。Game 持有 scene/assets/
+      // sampler 的波高采样，敌船模型经 AssetLoader 缓存克隆。
+      this.game = new Game({
+        scene: this.scene,
+        uiRoot: this.uiRoot,
+        camera: this.camera,
+        player: ship,
+        assets: this.assets,
+        controls: this.shipControls,
+        heightAt: (x, z) => this.sampler.height(x, z),
+      });
 
       ship.setDebugProbesVisible(this.state.buoyancyProbes);
       this.wake.setDebugVisible(this.state.wakeProbes);
@@ -1673,6 +1693,13 @@ class App {
   private applyShipControlMode(): void {
     const controls = this.shipControls;
     if (controls === null) return;
+    // 阶段 B1：游戏接管主船期间，基座控制器保持停用（Game 构造时也会再停一次，
+    // 这里挡住的是之后每次相机模式切换重新打开它的路径）。
+    if (this.game !== null) {
+      controls.setEnabled(false);
+      controls.setKeyboardEnabled(false);
+      return;
+    }
     const mode = this.state.cameraMode;
     // `resetInput`, not `setInput(0, 0)`. Throttle and rudder are spooled, and
     // `setEnabled` only clears the spool on a *transition* — Cinematic and Boat
@@ -2348,7 +2375,9 @@ class App {
     audio.peakWavelength = this.state.peakWavelength;
     audio.rain = raining;
     audio.submersion = submersion;
-    audio.hullSpeed = this.shipControls?.getState(this.shipStateOut).speed ?? 0;
+    audio.hullSpeed = this.game
+      ? Math.abs(this.game.playerSpeed)
+      : (this.shipControls?.getState(this.shipStateOut).speed ?? 0);
     // The gull scheduler takes the flock's actual size rather than the tier's,
     // so a sky with no birds in it stays silent instead of the audio inventing
     // some. Low draws none, and hears none.
@@ -2453,7 +2482,9 @@ class App {
       {
         preset: this.state.preset,
         windSpeed: this.state.windSpeed,
-        atHelm: this.state.cameraMode === 'boat' && (this.shipControls?.isEnabled ?? false),
+        atHelm:
+          this.state.cameraMode === 'boat' &&
+          (this.game !== null || (this.shipControls?.isEnabled ?? false)),
       },
       elapsed,
     );
@@ -2494,6 +2525,10 @@ class App {
     }
     this.shipControls?.update(dt);
 
+    // 海战玩法：在尾迹/追逐相机读取船位之前推进，本帧的移动本帧生效。
+    // 游戏停用了基座控制器，直接写 ship.object 的变换；浮力解算只剩漂浮道具。
+    this.game?.update(dt);
+
     // Safe before the sampler's first readback resolves: it reports height 0 and
     // bodies simply settle to flat water rather than producing NaN.
     this.buoyancy.update(dt, this.sampler);
@@ -2507,8 +2542,13 @@ class App {
       // Distance travelled cannot tell ahead from astern and counts the hull's
       // heave on a swell as forward motion, so a ship sitting still in a seaway
       // laid down a wake.
+      // 阶段 B1：游戏接管时航速来自 Game 的街机模型（带符号纵向速度）。
       const state = this.shipControls?.getState(this.shipStateOut) ?? null;
-      const speed = state ? Math.abs(state.forwardSpeed) : 0;
+      const speed = this.game
+        ? Math.abs(this.game.playerSpeed)
+        : state
+          ? Math.abs(state.forwardSpeed)
+          : 0;
       this.previousShipPosition.copy(position);
 
       this.wake.emit(position.x, position.z, ship.heading, speed, ship.hullBeam);
@@ -3011,6 +3051,7 @@ class App {
     this.particles?.dispose();
     this.caustics?.dispose();
     this.shipControls?.dispose();
+    this.game?.dispose();
     // Restores the dry roughness and colour on materials the loader's cache
     // shares, so a re-created App does not inherit a permanently wet ship.
     this.wetness.dispose();
