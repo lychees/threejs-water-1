@@ -14,6 +14,10 @@ import type { Combat } from './Combat';
 const ENEMY_HULL = 0x3a3f4a; // 深灰船体
 const ENEMY_SAIL = 0x9e3030; // 暗红帆，辨识度
 
+/** AI 循环的复用向量（每艘敌船每帧都在这条路径上）。 */
+const _toP = new THREE.Vector3();
+const _starboard = new THREE.Vector3();
+
 /** 敌船可用的中大型船池（SHIP_DEFS id）。 */
 const ENEMY_POOL = [9, 10, 11, 15, 20];
 
@@ -89,7 +93,9 @@ export class EnemyFleet {
         this.spawnOne(player.position);
       }
     }
-    const aliveCount = this.enemies.filter((e) => !e.sinking).length;
+    // 手数存活数，不为它每帧 filter 出一个新数组
+    let aliveCount = 0;
+    for (const e of this.enemies) if (!e.sinking) aliveCount++;
     if (aliveCount + this.respawnTimers.length < this.targetCount) {
       this.respawnTimers.push(5 + Math.random() * 4);
     }
@@ -119,7 +125,8 @@ export class EnemyFleet {
         continue;
       }
 
-      const toP = new THREE.Vector3().subVectors(pp, e.position);
+      // 模块级复用向量：每艘敌船每帧都在这条路径上，堆分配一分都不该花
+      const toP = _toP.subVectors(pp, e.position);
       const dist = toP.length();
       const angleToP = Math.atan2(toP.x, toP.z);
 
@@ -139,8 +146,8 @@ export class EnemyFleet {
       // 开火：舷侧大致对准玩家且进入射程
       e.cooldown -= dt;
       if (e.cooldown <= 0 && dist < 52) {
-        const starboard = new THREE.Vector3(-Math.cos(e.heading), 0, Math.sin(e.heading)); // 与 Combat 舷侧约定一致
-        const dot = starboard.dot(toP.clone().normalize());
+        const starboard = _starboard.set(-Math.cos(e.heading), 0, Math.sin(e.heading)); // 与 Combat 舷侧约定一致
+        const dot = starboard.dot(toP.normalize()); // toP 到此用完，原地归一化即可
         if (Math.abs(dot) > 0.72) {
           // 精度一般：散布大、无提前量，给玩家躲避空间
           this.combat.fireBroadside(e, dot > 0 ? 1 : -1, {

@@ -1,4 +1,4 @@
-﻿export type QualityTier = 'low' | 'medium' | 'high' | 'ultra' | 'max';
+export type QualityTier = 'low' | 'medium' | 'high' | 'ultra' | 'max';
 
 export interface QualitySettings {
   /** Resolution of each FFT cascade (square). */
@@ -525,7 +525,10 @@ export class AdaptiveQuality {
     // Debounce so a single hitch never triggers a visible quality change.
     if (elapsed - this.lastChange < 6) return;
 
-    if (fps < this.targetFps * 0.75) {
+    // 阈值 0.85 × 目标（≈47 fps）：旧值 0.75（≈41 fps）意味着 42~46 fps 的
+    // 「明显卡但永不降级」地带会无限持续下去——用户报"high 有点卡"正是这个区间。
+    // 持续 2s 即降档（旧 2.5s），6s 防抖不变，不会来回跳。
+    if (fps < this.targetFps * 0.85) {
       this.belowTargetFor += dt;
       this.aboveTargetFor = 0;
     } else {
@@ -533,7 +536,7 @@ export class AdaptiveQuality {
       this.belowTargetFor = 0;
     }
 
-    if (this.belowTargetFor > 2.5) {
+    if (this.belowTargetFor > 2) {
       const index = TIER_ORDER.indexOf(currentTier);
       if (index > 0) {
         this.belowTargetFor = 0;

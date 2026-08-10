@@ -116,6 +116,21 @@ export class GameHud {
     }
   }
 
+  /** 上次写入的展示值缓存：没变就不碰 DOM（每帧 style/textContent 写入会强制重排）。 */
+  private readonly shown = {
+    hp: -1,
+    sail: '',
+    reloadL: -1,
+    reloadR: -1,
+    reloadB: -1,
+    kills: -1,
+    wave: -1,
+    loot: -1,
+    fire: '',
+    leak: '',
+    sailDebuff: '',
+  };
+
   update(
     player: GameShip,
     sailAmount: number,
@@ -125,22 +140,64 @@ export class GameHud {
     wave: number,
     loot = 0,
   ): void {
-    this.hpFill.style.width = `${(player.hp / player.maxHp) * 100}%`;
-    this.killsEl.textContent = String(kills);
-    this.waveEl.textContent = String(wave);
-    this.lootEl.textContent = String(loot);
-    this.sailState.textContent =
+    const c = this.shown;
+    const hp = Math.round((player.hp / player.maxHp) * 1000) / 10;
+    if (hp !== c.hp) {
+      c.hp = hp;
+      this.hpFill.style.width = `${hp}%`;
+    }
+    if (kills !== c.kills) {
+      c.kills = kills;
+      this.killsEl.textContent = String(kills);
+    }
+    if (wave !== c.wave) {
+      c.wave = wave;
+      this.waveEl.textContent = String(wave);
+    }
+    if (loot !== c.loot) {
+      c.loot = loot;
+      this.lootEl.textContent = String(loot);
+    }
+    const sailText =
       sailAmount < 0
         ? `帆位：倒车 ${Math.round(-sailAmount * 100)}%（W 复位）`
         : `帆位：${Math.round(sailAmount * 100)}%（按住 W/S 调整）`;
+    if (sailText !== c.sail) {
+      c.sail = sailText;
+      this.sailState.textContent = sailText;
+    }
     // 装填条只表示冷却进度（蓄力进度由画面里的弹道预览扇面表达）
-    this.reloadL.style.width = `${(1 - cooldowns.l / reloadMax.broadside) * 100}%`;
-    this.reloadR.style.width = `${(1 - cooldowns.r / reloadMax.broadside) * 100}%`;
-    this.reloadB.style.width = `${(1 - cooldowns.bow / reloadMax.bow) * 100}%`;
+    const rl = Math.round((1 - cooldowns.l / reloadMax.broadside) * 100);
+    const rr = Math.round((1 - cooldowns.r / reloadMax.broadside) * 100);
+    const rb = Math.round((1 - cooldowns.bow / reloadMax.bow) * 100);
+    if (rl !== c.reloadL) {
+      c.reloadL = rl;
+      this.reloadL.style.width = `${rl}%`;
+    }
+    if (rr !== c.reloadR) {
+      c.reloadR = rr;
+      this.reloadR.style.width = `${rr}%`;
+    }
+    if (rb !== c.reloadB) {
+      c.reloadB = rb;
+      this.reloadB.style.width = `${rb}%`;
+    }
     // 玩家 debuff 图标（带剩余秒数）
-    this.debuffFire.textContent = player.debuff.fire > 0 ? `🔥 ${Math.ceil(player.debuff.fire)}s` : '';
-    this.debuffLeak.textContent = player.debuff.leak > 0 ? `💧 ${Math.ceil(player.debuff.leak)}s` : '';
-    this.debuffSail.textContent = player.debuff.sail > 0 ? `⛵ ${Math.ceil(player.debuff.sail)}s` : '';
+    const fire = player.debuff.fire > 0 ? `🔥 ${Math.ceil(player.debuff.fire)}s` : '';
+    const leak = player.debuff.leak > 0 ? `💧 ${Math.ceil(player.debuff.leak)}s` : '';
+    const sailD = player.debuff.sail > 0 ? `⛵ ${Math.ceil(player.debuff.sail)}s` : '';
+    if (fire !== c.fire) {
+      c.fire = fire;
+      this.debuffFire.textContent = fire;
+    }
+    if (leak !== c.leak) {
+      c.leak = leak;
+      this.debuffLeak.textContent = leak;
+    }
+    if (sailD !== c.sailDebuff) {
+      c.sailDebuff = sailD;
+      this.debuffSail.textContent = sailD;
+    }
   }
 
   /** 屏幕下方中央的提示飘字（天气切换、拾取等）。 */

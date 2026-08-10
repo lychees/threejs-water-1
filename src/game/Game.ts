@@ -115,6 +115,12 @@ export class Game {
   private readonly collisionCooldowns = new Map<string, number>();
   private cidCounter = 0;
 
+  /** 主循环复用容器：每帧重建引用，不重建对象（基座的性能政策是逐帧零分配）。 */
+  private readonly shipList: GameShip[] = [];
+  private readonly targets: HitTarget[] = [];
+  private readonly targetPool: HitTarget[] = [];
+  private readonly scratch = new THREE.Vector3();
+
   constructor(options: GameOptions) {
     this.camera = options.camera;
     this.heightAt = options.heightAt;
@@ -388,39 +394,56 @@ export class Game {
       }
     });
 
-    // ---- 命中判定 ----
-    const targets: HitTarget[] = [{ ship: player, isPlayer: true }];
-    for (const e of this.fleet.enemies) targets.push({ ship: e, isPlayer: false });
+    // ---- 命中判定（targets 复用池：每帧重建引用，不新建包装对象） ----
+    const targets = this.targets;
+    targets.length = 0;
+    let pool = this.targetPool[0];
+    if (!pool) pool = this.targetPool[0] = { ship: player, isPlayer: true };
+    pool.ship = player;
+    targets.push(pool);
+    const enemies = this.fleet.enemies;
+    for (let i = 0; i < enemies.length; i++) {
+      let wrap = this.targetPool[i + 1];
+      if (!wrap) wrap = this.targetPool[i + 1] = { ship: enemies[i], isPlayer: false };
+      wrap.ship = enemies[i];
+      targets.push(wrap);
+    }
     this.combat.update(dt, targets, this.onHit);
 
+    // 沉船冒泡与 debuff 粒子共用的船列表（复用数组）
+    const ships = this.shipList;
+    ships.length = 0;
+    ships.push(player);
+    for (const e of enemies) ships.push(e);
+
     // ---- 沉船冒泡 ----
-    for (const s of [player, ...this.fleet.enemies]) {
+    for (const s of ships) {
       if (!s.sinking || s.dead) continue;
       if (Math.random() < dt * 8) {
-        const pos = s.position.clone();
+        const pos = this.scratch.copy(s.position);
         pos.x += (Math.random() - 0.5) * 4;
         pos.z += (Math.random() - 0.5) * 4;
         pos.y = this.heightAt(pos.x, pos.z);
-        this.combat.bubbles(pos);
+        this.combat.bubbles(pos); // Burst 构造时拷贝坐标，复用向量安全
       }
     }
 
     // ---- debuff 粒子：着火冒火焰、漏水舷侧冒水花；大雨浇灭所有着火 ----
-    for (const s of [player, ...this.fleet.enemies]) {
+    for (const s of ships) {
       if (s.sinking || s.dead) continue;
       if (raining && s.debuff.fire > 0) {
         s.debuff.fire = 0;
         if (s === player) this.hud.floatText('大雨浇灭了火焰');
       }
       if (s.debuff.fire > 0 && Math.random() < dt * 10) {
-        const pos = s.position.clone();
+        const pos = this.scratch.copy(s.position);
         pos.x += (Math.random() - 0.5) * 2;
         pos.z += (Math.random() - 0.5) * 2;
         pos.y += 1.5;
         this.combat.firePuff(pos);
       }
       if (s.debuff.leak > 0 && Math.random() < dt * 1.5) {
-        const pos = s.position.clone();
+        const pos = this.scratch.copy(s.position);
         pos.x += (Math.random() - 0.5) * 3;
         pos.z += (Math.random() - 0.5) * 3;
         pos.y = this.heightAt(pos.x, pos.z) + 0.1;
@@ -604,7 +627,10 @@ export class Game {
 
   /** 椭圆碰撞体 + 撞击伤害，旧 js/main.js resolveShipCollisions 直译。 */
   private resolveShipCollisions(): void {
-    const ships = [this.player, ...this.fleet.enemies].filter((s) => !s.sinking && !s.dead);
+    const ships = this.shipList;
+    ships.length = 0;
+    if (!this.player.sinking && !this.player.dead) ships.push(this.player);
+    for (const e of this.fleet.enemies) if (!e.sinking && !e.dead) ships.push(e);
     for (let i = 0; i < ships.length; i++) {
       for (let j = i + 1; j < ships.length; j++) {
         const a = ships[i];

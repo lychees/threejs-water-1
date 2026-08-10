@@ -378,8 +378,16 @@ export class Combat {
       }
     }
 
-    // ---- 粒子 / 波纹 ----
-    this.bursts = this.bursts.filter((b) => b.update(dt));
-    this.rings = this.rings.filter((r) => r.update(dt));
+    // ---- 粒子 / 波纹（原地压缩，不每帧 filter 出新数组） ----
+    let w = 0;
+    for (let i = 0; i < this.bursts.length; i++) {
+      if (this.bursts[i].update(dt)) this.bursts[w++] = this.bursts[i];
+    }
+    this.bursts.length = w;
+    let wr = 0;
+    for (let i = 0; i < this.rings.length; i++) {
+      if (this.rings[i].update(dt)) this.rings[wr++] = this.rings[i];
+    }
+    this.rings.length = wr;
   }
 }
