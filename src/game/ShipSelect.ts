@@ -29,7 +29,9 @@ import { renderShipThumbnail } from './ShipThumbs';
 
 /** 属性条归一化分母（旧 js/main.js 选船卡片同源）。 */
 const STAT_MAX = { hp: 170, maxSpeed: 21, turnRate: 1.5, cannons: 6 } as const;
-const STAT_LABELS: readonly [keyof ShipStats, string][] = [
+/** 属性条的键（不含 price 等展示字段） */
+type StatKey = keyof typeof STAT_MAX;
+const STAT_LABELS: readonly [StatKey, string][] = [
   ['hp', '血'],
   ['maxSpeed', '速'],
   ['turnRate', '舵'],
@@ -76,7 +78,7 @@ export function buildShipSelect(): HTMLElement {
   section.append(grid);
 
   let selected = resolveShipId();
-  const barsByDef = new Map<number, Map<keyof ShipStats, HTMLElement>>();
+  const barsByDef = new Map<number, Map<StatKey, HTMLElement>>();
   const thumbByDef = new Map<number, HTMLElement>();
   const cardByDef = new Map<number, HTMLElement>();
   const priceByDef = new Map<number, HTMLElement>();
@@ -110,7 +112,7 @@ export function buildShipSelect(): HTMLElement {
     card.append(name, en, price);
     cardByDef.set(def.id, card);
 
-    const bars = new Map<keyof ShipStats, HTMLElement>();
+    const bars = new Map<StatKey, HTMLElement>();
     for (const [key, labelText] of STAT_LABELS) {
       const row = document.createElement('span');
       row.className = 'shipselect__stat';
