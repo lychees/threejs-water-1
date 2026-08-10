@@ -179,6 +179,11 @@ export class Game {
     return this.player.speed;
   }
 
+  /** 任一火炮正在蓄力：CameraDirector 用它抑制 boat 模式的拖拽环视。 */
+  get isCharging(): boolean {
+    return this.chargeL !== null || this.chargeR !== null || this.chargeBow !== null;
+  }
+
   /**
    * 玩家外观解析：精致模型（勾选且有货）→ 基座 glTF 缩放（有货未勾选）→ 程序化。
    * 三条路径都把外观作为 +Z 船头的子节点挂进基座 ship.object（yaw +π/2 对齐

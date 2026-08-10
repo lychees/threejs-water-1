@@ -79,7 +79,6 @@ const CHASE_SENSITIVITY = 0.0052;
 /** Just short of straight down and straight up the mast. */
 const CHASE_PITCH_MIN = -0.5;
 const CHASE_PITCH_MAX = 1.15;
-const CHASE_RECENTRE_TAU = 2.2;
 
 const FLY_SPEED = 22;
 const FLY_SPEED_MIN = 1.5;
@@ -119,6 +118,13 @@ export class CameraDirector {
 
   // Chase state
   private target: CameraTarget | null = null;
+
+  /**
+   * 游戏层过滤器：返回 false 时 boat 模式的拖拽环视被抑制。
+   * 海战里按住 LMB/RMB 是蓄力开炮，同一手势不应同时转动相机——
+   * Game 在蓄力期间把它置为 false，平时拖拽环视不受影响。
+   */
+  chaseDragFilter: (() => boolean) | null = null;
 
   // Cinematic state
   private readonly cinematic = new CinematicDirector();
@@ -453,14 +459,8 @@ export class CameraDirector {
       return;
     }
 
-    // Recentre toward the stern whenever the viewer is not driving it. Framed as
-    // an exponential rather than a lerp so the rate is the same at any frame
-    // rate — the same reason the follow below is one.
-    if (!this.chaseDragging) {
-      const settle = 1 - Math.exp(-dt / CHASE_RECENTRE_TAU);
-      this.chaseYaw -= this.chaseYaw * settle;
-      this.chasePitch -= this.chasePitch * settle;
-    }
+    // 视角保持 viewer 离开时的位置，不做自动回中——海战里松手后镜头弹回
+    // 船尾会非常晕（旧行为是 chaseYaw/chasePitch 指数衰减回 0）。
 
     // Sit behind and above the target, looking slightly down at it — with the
     // viewer's orbit applied on top of the hull's own bearing, so the rig keeps
@@ -587,7 +587,9 @@ export class CameraDirector {
     }
     // Boat mode drags to orbit. No pointer lock: the helm is a mode a viewer
     // sits in for minutes at a time and locking the cursor there would trap it.
-    if (this.mode === 'boat') this.chaseDragging = true;
+    if (this.mode === 'boat') {
+      this.chaseDragging = this.chaseDragFilter ? this.chaseDragFilter() : true;
+    }
   };
 
   private onMouseUp = (): void => {
@@ -601,6 +603,11 @@ export class CameraDirector {
   private onMouseMove = (event: MouseEvent): void => {
     if (this.mode === 'boat') {
       if (!this.chaseDragging) return;
+      // 蓄力中途开始按住开炮键的情况：过滤器随时可中止本次拖拽
+      if (this.chaseDragFilter && !this.chaseDragFilter()) {
+        this.chaseDragging = false;
+        return;
+      }
       this.chaseYaw -= event.movementX * CHASE_SENSITIVITY;
       this.chasePitch += event.movementY * CHASE_SENSITIVITY;
       this.chasePitch = THREE.MathUtils.clamp(this.chasePitch, CHASE_PITCH_MIN, CHASE_PITCH_MAX);

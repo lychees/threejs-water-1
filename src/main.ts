@@ -1236,6 +1236,9 @@ class App {
         heightAt: (x, z) => this.sampler.height(x, z),
       });
 
+      // 蓄力开炮期间抑制 boat 相机拖拽环视（同一手势不身兼二职）
+      this.director.chaseDragFilter = () => !this.game?.isCharging;
+
       ship.setDebugProbesVisible(this.state.buoyancyProbes);
       this.wake.setDebugVisible(this.state.wakeProbes);
       this.previousShipPosition.copy(ship.object.position);
