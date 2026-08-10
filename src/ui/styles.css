@@ -1845,3 +1845,14 @@ body {
   object-fit: cover;
   display: block;
 }
+
+/* 射角显示（蓄力时高亮） */
+.ghud__elevation {
+  font-size: 11px;
+  color: var(--bone-dim);
+  margin-top: 4px;
+}
+
+.ghud__elevation.is-charging {
+  color: var(--red);
+}

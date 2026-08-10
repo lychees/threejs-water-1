@@ -26,7 +26,8 @@ type SliderKey =
   | 'timeOfDay'
   | 'fogDensity'
   | 'volume'
-  | 'pixelRatio';
+  | 'pixelRatio'
+  | 'enemyDensity';
 type ToggleKey = 'buoyancyProbes' | 'wakeProbes' | 'forceWebGL';
 
 interface SliderSpec {
@@ -66,7 +67,7 @@ const ENVIRONMENT_SLIDERS = [
   'timeOfDay',
 ] as const satisfies readonly SliderKey[];
 
-const DISPLAY_SLIDERS = ['volume', 'pixelRatio'] as const satisfies readonly SliderKey[];
+const DISPLAY_SLIDERS = ['volume', 'pixelRatio', 'enemyDensity'] as const satisfies readonly SliderKey[];
 
 const SLIDERS: readonly SliderSpec[] = [
   {
@@ -129,6 +130,14 @@ const SLIDERS: readonly SliderSpec[] = [
     max: 2,
     step: 0.05,
     format: (v) => `${v.toFixed(2)}x`,
+  },
+  {
+    key: 'enemyDensity',
+    label: 'Enemy Ships',
+    min: 1,
+    max: 6,
+    step: 1,
+    format: (v) => `${Math.round(v)}`,
   },
 ];
 

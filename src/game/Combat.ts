@@ -162,7 +162,7 @@ export class Combat {
     return Math.max(3, Math.round(count * this.particleScale));
   }
 
-  /** 舷侧齐射。side: -1 左舷 / +1 右舷。 */
+  /** 舷侧齐射。side: -1 左舷 / +1 右舷。vy 为上抛初速（射角，默认 5.5 旧手感）。 */
   fireBroadside(
     ship: GameShip,
     side: -1 | 1,
@@ -172,6 +172,7 @@ export class Combat {
       spread?: number;
       fromPlayer?: boolean;
       damageMul?: number;
+      vy?: number;
     } = {},
   ): void {
     const {
@@ -180,6 +181,7 @@ export class Combat {
       spread = 0.06,
       fromPlayer = true,
       damageMul = 1,
+      vy = 5.5,
     } = opts;
     // 舷侧方向：右舷 = (-cos h, 0, sin h)（旧版约定，与 GameShip.heading 同源）
     const dir = new THREE.Vector3(-side * Math.cos(ship.heading), 0, side * Math.sin(ship.heading));
@@ -194,7 +196,7 @@ export class Combat {
       // 少量散布 + 上抛形成抛物线
       vel.x += (Math.random() - 0.5) * speed * spread * 2;
       vel.z += (Math.random() - 0.5) * speed * spread * 2;
-      vel.y = 5 + Math.random() * 1.5;
+      vel.y = vy * (0.9 + Math.random() * 0.27); // 上抛（射角）带少量散布
 
       const mesh = new THREE.Mesh(this.ballGeo, this.ballMat);
       mesh.position.copy(start);
@@ -216,14 +218,14 @@ export class Combat {
     }
   }
 
-  /** 艏炮：朝船头单发，弹道平直、初速略高（玩家专用）。 */
-  fireBowShot(ship: GameShip, opts: { speed?: number; damageMul?: number } = {}): void {
-    const { speed = 36, damageMul = 1 } = opts;
+  /** 艏炮：朝船头单发，弹道平直、初速略高（玩家专用）。vy 默认 2.5 低平弹道。 */
+  fireBowShot(ship: GameShip, opts: { speed?: number; damageMul?: number; vy?: number } = {}): void {
+    const { speed = 36, damageMul = 1, vy = 2.5 } = opts;
     const fwd = ship.forward.clone();
     const start = ship.position.clone().addScaledVector(fwd, 4.2 * (ship.lengthScale || 1));
     start.y += 1.4;
     const vel = fwd.multiplyScalar(speed);
-    vel.y = 2.5; // 上抛小 → 弹道平直
+    vel.y = vy;
     const mesh = new THREE.Mesh(this.ballGeo, this.ballMat);
     mesh.position.copy(start);
     this.scene.add(mesh);

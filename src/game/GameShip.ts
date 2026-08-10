@@ -76,6 +76,10 @@ export class GameShip {
   /** AI 附加状态（敌船用，玩家忽略）。 */
   orbitDir: 1 | -1 = 1;
   cooldown = 0;
+  /** 敌船分型（玩家恒为 'warship'，不影响任何逻辑）。 */
+  archetype: 'warship' | 'raider' | 'battleship' | 'merchant' = 'warship';
+  /** 小地图上的点颜色。 */
+  mapColor = '#e0483e';
 
   private readonly scratchForward = new THREE.Vector3();
 

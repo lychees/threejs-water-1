@@ -68,6 +68,9 @@ import { assetUrl } from './core/paths';
 
 /** Scratch for the test-hook camera pin; the hook must not allocate either. */
 const _pinPosition = new THREE.Vector3();
+
+/** Panel 里唯一持久化的滑杆：敌船密度。 */
+const ENEMY_DENSITY_KEY = 'web-ocean:enemy-density:v1';
 const _pinTarget = new THREE.Vector3();
 /** Scratch for the water's key-light direction, read every frame. */
 const _keyDirection = new THREE.Vector3();
@@ -354,6 +357,13 @@ class App {
       quality: options.quality,
       forceWebGL: options.forceWebGL,
     };
+    // 敌船密度是 Panel 里唯一持久化的滑杆（其余设置按基座惯例只在会话内）
+    try {
+      const stored = Number(window.localStorage.getItem(ENEMY_DENSITY_KEY));
+      if (stored >= 1 && stored <= 6) this.state.enemyDensity = Math.round(stored);
+    } catch {
+      // localStorage 不可用时用默认
+    }
   }
 
   async start(): Promise<void> {
@@ -1238,6 +1248,7 @@ class App {
         controls: this.shipControls,
         audio: this.audio,
         shipStats,
+        enemyDensity: this.state.enemyDensity,
         isRaining: () =>
           this.weather.getKind() === 'rain' && this.weather.getIntensity() > 0.05,
         isSnowing: () =>
@@ -1434,6 +1445,15 @@ class App {
         );
         this.onResize();
         break;
+      case 'enemyDensity': {
+        try {
+          window.localStorage.setItem(ENEMY_DENSITY_KEY, String(this.state.enemyDensity));
+        } catch {
+          // 隐私模式写不进去就只影响当次会话
+        }
+        this.game?.setEnemyDensity(this.state.enemyDensity);
+        break;
+      }
       case 'cameraMode': {
         // Read before `setMode`, which is what changes it. The environment-cube
         // restore below has to know whether the tour is being *left*, and by the

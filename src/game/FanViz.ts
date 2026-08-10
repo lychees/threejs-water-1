@@ -53,6 +53,7 @@ function ballisticRange(speed: number, vy: number, h0: number): number {
 /**
  * side: -1 左舷 / +1 右舷 / 0 艏炮；charge 为 null 时隐藏。
  * 参数与 Combat.fireBroadside / fireBowShot 的初速、上抛、出膛点一一对应。
+ * elevVy：当前射角的上抛初速（蓄力期间滚轮调节），射程随它实时变化。
  */
 export function updateFanViz(
   mesh: THREE.Mesh,
@@ -60,6 +61,7 @@ export function updateFanViz(
   side: -1 | 0 | 1,
   player: GameShip,
   heightAt: WaveHeightAt,
+  elevVy: number,
 ): void {
   if (charge === null) {
     mesh.visible = false;
@@ -79,7 +81,7 @@ export function updateFanViz(
     dirAng = player.heading;
     sx = pp.x + Math.sin(player.heading) * 4.2 * ls;
     sz = pp.z + Math.cos(player.heading) * 4.2 * ls;
-    vy = 2.5;
+    vy = elevVy;
     h0 = 1.4;
     baseSpeed = FEEL.BOW_SPEED;
     halfAng = FAN_HALF_ANGLE_BOW;
@@ -89,7 +91,7 @@ export function updateFanViz(
     dirAng = Math.atan2(dx, dz);
     sx = pp.x + dx * 1.5;
     sz = pp.z + dz * 1.5;
-    vy = 5.5;
+    vy = elevVy;
     h0 = 1.3;
     baseSpeed = FEEL.BROADSIDE_SPEED;
     halfAng = FAN_HALF_ANGLE;

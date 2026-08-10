@@ -43,6 +43,9 @@ import { FEEL } from './PlayerConfig';
 /** 基座 glTF 船模归一化后的船长（米），缩放真实模型船型时以此为基准。 */
 const BASE_MODEL_LENGTH = 27;
 
+/** 射角档位（上抛初速 vy，m/s）：低平射 ↔ 高抛射。 */
+const ELEVATION_STEPS = [2, 4, 5.5, 7.5, 9.5, 12, 14] as const;
+
 // ---- 船只碰撞（椭圆碰撞体 + 撞击伤害），旧 js/main.js 同名单元 ----
 const COLLISION_MIN_SPEED = 3; // 相对速度低于此值不计伤害
 const COLLISION_DAMAGE_MUL = 4; // 伤害 = (相对速度 - 阈值) × 系数
@@ -62,6 +65,8 @@ export interface GameOptions {
   audio: AudioSystem;
   /** 25 船属性表（ships.json 映射完成；加载失败时各项为 FALLBACK_STATS）。 */
   shipStats: Record<number, ShipStats>;
+  /** 同屏敌船基准数（Panel 滑杆，1~6）。 */
+  enemyDensity: number;
   /** 基座天气：大雨（rain 且有一定强度）时灭火、不新附着火、全船减速。 */
   isRaining: () => boolean;
   /** 下雪（arctic）：轻度减速，不灭火。 */
@@ -121,6 +126,9 @@ export class Game {
   /** 沉船音效每艘只响一次。 */
   private readonly sinkSounded = new WeakSet<GameShip>();
 
+  /** 射角档位（上抛初速 vy）：7 档，默认第 3 档 = 旧手感 5.5。 */
+  private elevationStep = 2;
+
   private readonly keys = new Set<string>();
   private readonly collisionCooldowns = new Map<string, number>();
   private cidCounter = 0;
@@ -159,6 +167,7 @@ export class Game {
     this.combat = new Combat(options.scene, this.heightAt);
     this.combat.onSplash = () => this.audio.playSplash(0.7);
     this.fleet = new EnemyFleet(options.scene, this.combat);
+    this.fleet.densityCap = options.enemyDensity;
     this.hud = new GameHud(options.uiRoot);
     this.minimap = new Minimap(options.uiRoot);
 
@@ -178,6 +187,9 @@ export class Game {
     window.addEventListener('mousedown', this.onMouseDown, { signal });
     window.addEventListener('mouseup', this.onMouseUp, { signal });
     window.addEventListener('contextmenu', this.onContextMenu, { signal });
+    // 蓄力期间滚轮调射角：capture 阶段拦截，boat 相机的滚轮缩放（冒泡阶段
+    // 挂在 canvas 上）被 stopPropagation 挡掉；未蓄力时完全放行。
+    window.addEventListener('wheel', this.onWheel, { capture: true, passive: false, signal });
 
     this.begin();
 
@@ -380,9 +392,9 @@ export class Game {
     if (this.chargeL !== null) this.chargeL += dt;
     if (this.chargeR !== null) this.chargeR += dt;
     if (this.chargeBow !== null) this.chargeBow += dt;
-    updateFanViz(this.fanL, this.chargeL, -1, player, this.heightAt);
-    updateFanViz(this.fanR, this.chargeR, 1, player, this.heightAt);
-    updateFanViz(this.fanBow, this.chargeBow, 0, player, this.heightAt);
+    updateFanViz(this.fanL, this.chargeL, -1, player, this.heightAt, this.elevationVy);
+    updateFanViz(this.fanR, this.chargeR, 1, player, this.heightAt, this.elevationVy);
+    updateFanViz(this.fanBow, this.chargeBow, 0, player, this.heightAt, this.elevationVy);
 
     // ---- 冷却 ----
     this.cooldownL = Math.max(0, this.cooldownL - dt);
@@ -417,8 +429,13 @@ export class Game {
     // ---- 实体更新 ----
     player.update(dt, this.heightAt);
     this.fleet.update(dt, player, this.heightAt, {
-      onEnemySunk: () => {
+      onEnemySunk: (e) => {
         this.kills += 1;
+        // 武装商船：击沉掉双倍战利品
+        if (e.archetype === 'merchant') {
+          this.loot += 2;
+          this.hud.floatText('+2 战利品');
+        }
       },
       onWaveUp: () => {
         // 波次提升，HUD 每帧自动刷新
@@ -527,6 +544,8 @@ export class Game {
       this.kills,
       this.fleet.wave,
       this.loot,
+      this.elevationDegrees,
+      this.chargeL !== null || this.chargeR !== null || this.chargeBow !== null,
     );
     this.hud.updateEnemyHpBars(dt, this.fleet.enemies, this.camera);
     if ((this.mmFrame++ & 3) === 0) {
@@ -544,6 +563,11 @@ export class Game {
   touchFire(side: 'L' | 'R', down: boolean): void {
     if (down) this.startCharge(side);
     else this.releaseCharge(side);
+  }
+
+  /** Panel 敌船密度滑杆：调低不杀现有敌船（只是不再补员），调高立即补。 */
+  setEnemyDensity(n: number): void {
+    this.fleet.densityCap = Math.round(THREE.MathUtils.clamp(n, 1, 6));
   }
 
   dispose(): void {
@@ -598,6 +622,30 @@ export class Game {
     e.preventDefault();
   };
 
+  /** 当前射角的上抛初速（vy）。 */
+  get elevationVy(): number {
+    return ELEVATION_STEPS[this.elevationStep];
+  }
+
+  /** 显示用的名义射角（按舷炮基准初速 40 折算）。 */
+  get elevationDegrees(): number {
+    return Math.round(THREE.MathUtils.radToDeg(Math.atan(this.elevationVy / FEEL.BROADSIDE_SPEED)));
+  }
+
+  private readonly onWheel = (e: WheelEvent): void => {
+    const charging = this.chargeL !== null || this.chargeR !== null || this.chargeBow !== null;
+    if (!charging) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // 滚轮上推（deltaY<0）= 抬高射角
+    const delta = e.deltaY < 0 ? 1 : -1;
+    this.elevationStep = THREE.MathUtils.clamp(
+      this.elevationStep + delta,
+      0,
+      ELEVATION_STEPS.length - 1,
+    );
+  };
+
   // ------------------------------------------------------------------ 火炮
 
   /** 帆位连续设置（倒车为负值；破帆时上限被压低）。 */
@@ -642,6 +690,7 @@ export class Game {
       spread: 0.05,
       fromPlayer: true, // 炮数取 ship.cannons
       damageMul: (0.7 + 0.8 * p) * primeD, // 伤害随蓄力
+      vy: this.elevationVy, // 射角（蓄力期间滚轮调节）
     });
     this.audio.playCannon();
     if (side < 0) {
@@ -662,6 +711,7 @@ export class Game {
       speed: FEEL.BOW_SPEED * (0.6 + 0.9 * p) * (primed ? FEEL.PRIME_SPEED_MUL : 1),
       damageMul:
         (0.7 + 0.8 * p) * (this.player.cannons <= 2 ? 1.5 : 1) * (primed ? FEEL.PRIME_DAMAGE_MUL : 1),
+      vy: this.elevationVy,
     });
     this.audio.playCannon();
     this.cooldownBow = FEEL.BOW_RELOAD;

@@ -53,6 +53,8 @@ export interface UiState {
   /** Device pixel ratio multiplier, 0.5..2. */
   pixelRatio: number;
   cameraMode: CameraMode;
+  /** 同屏敌船基准数（1~6，随波次 +1 直至上限 6）。 */
+  enemyDensity: number;
 }
 
 export interface UiCallbacks {
@@ -78,6 +80,7 @@ export const DEFAULT_UI_STATE: UiState = {
   pixelRatio: 1,
   // 阶段 B1：进入即掌舵（海战玩法默认）。
   cameraMode: 'boat',
+  enemyDensity: 2,
 };
 
 export const QUALITY_TIERS: readonly QualityTier[] = ['low', 'medium', 'high', 'ultra', 'max'];

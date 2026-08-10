@@ -78,7 +78,7 @@ export class Minimap {
       }
     }
 
-    // 敌船：红点；超出范围的钳到边缘指示方向
+    // 敌船：按 archetype 着色；超出范围的钳到边缘指示方向
     for (const e of enemies) {
       if (e.sinking) continue;
       let dx = (e.position.x - px) * s;
@@ -88,7 +88,7 @@ export class Minimap {
         dx *= rim / d;
         dy *= rim / d;
       }
-      dot(cx + dx, cx + dy, 4.5, '#e0483e');
+      dot(cx + dx, cx + dy, 4.5, e.mapColor);
     }
 
     // 玩家：中心白色三角，指示船头朝向

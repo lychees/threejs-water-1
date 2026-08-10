@@ -7,6 +7,7 @@
 
 import * as THREE from 'three/webgpu';
 import type { GameShip } from './GameShip';
+import { ARCHETYPES } from './EnemyFleet';
 
 const EHP_POOL_SIZE = 8;
 const ENEMY_HP_BAR_TIME = 5; // 敌船受击后血条显示秒数
@@ -40,9 +41,10 @@ export class GameHud {
   private readonly debuffFire: HTMLElement;
   private readonly debuffLeak: HTMLElement;
   private readonly debuffSail: HTMLElement;
+  private readonly elevationEl: HTMLElement;
   private readonly overEl: HTMLElement;
   private readonly overKills: HTMLElement;
-  private readonly ehpPool: { el: HTMLElement; fill: HTMLElement }[] = [];
+  private readonly ehpPool: { el: HTMLElement; fill: HTMLElement; name: HTMLElement }[] = [];
   private readonly ehpVec = new THREE.Vector3();
 
   constructor(root: HTMLElement) {
@@ -66,6 +68,9 @@ export class GameHud {
     this.reloadL = mkReload('左舷 Q');
     this.reloadR = mkReload('右舷 E');
     this.reloadB = mkReload('艏炮 ␣');
+    // 射角显示（蓄力期间滚轮调节）
+    this.elevationEl = el('div', 'ghud__elevation', '');
+    status.append(this.elevationEl);
 
     // ---- 玩家 debuff 图标（带剩余秒数；无 debuff 时占位空串） ----
     const debuffs = el('div', 'ghud__debuffs');
@@ -109,10 +114,11 @@ export class GameHud {
       const bar = el('div', 'ghud__ehp-bar');
       const fill = el('div', 'ghud__ehp-fill');
       bar.append(fill);
-      wrap.append(el('div', 'ghud__ehp-name', '敌船'), bar);
+      const name = el('div', 'ghud__ehp-name', '敌船');
+      wrap.append(name, bar);
       wrap.style.display = 'none';
       this.rootEl.append(wrap);
-      this.ehpPool.push({ el: wrap, fill });
+      this.ehpPool.push({ el: wrap, fill, name });
     }
   }
 
@@ -129,6 +135,8 @@ export class GameHud {
     fire: '',
     leak: '',
     sailDebuff: '',
+    elevation: '',
+    charging: false,
   };
 
   update(
@@ -140,6 +148,8 @@ export class GameHud {
     kills: number,
     wave: number,
     loot = 0,
+    elevationDeg = 0,
+    charging = false,
   ): void {
     const c = this.shown;
     const hp = Math.round((player.hp / player.maxHp) * 1000) / 10;
@@ -203,6 +213,14 @@ export class GameHud {
       c.sailDebuff = sailD;
       this.debuffSail.textContent = sailD;
     }
+    // 射角：蓄力时高亮，平时淡显
+    const elevText = `仰角 ↗${elevationDeg}°`;
+    if (elevText !== c.elevation || charging !== c.charging) {
+      c.elevation = elevText;
+      c.charging = charging;
+      this.elevationEl.textContent = charging ? `${elevText}（滚轮调节）` : elevText;
+      this.elevationEl.classList.toggle('is-charging', charging);
+    }
   }
 
   /** 屏幕下方中央的提示飘字（天气切换、拾取等）。 */
@@ -254,6 +272,10 @@ export class GameHud {
       s.el.style.left = `${(this.ehpVec.x * 0.5 + 0.5) * 100}%`;
       s.el.style.top = `${(-this.ehpVec.y * 0.5 + 0.5) * 100}%`;
       s.fill.style.width = `${(e.hp / e.maxHp) * 100}%`;
+      // 分型名（袭击艇/战列舰/商船/敌船），颜色与小地图一致
+      const arch = ARCHETYPES[e.archetype];
+      if (s.name.textContent !== arch.label) s.name.textContent = arch.label;
+      s.name.style.color = arch.mapColor;
     }
     for (; slot < EHP_POOL_SIZE; slot++) this.ehpPool[slot].el.style.display = 'none';
   }
