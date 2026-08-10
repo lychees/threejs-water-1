@@ -1727,10 +1727,17 @@ body {
 /* 玩家 debuff 图标行 */
 .ghud__debuffs {
   display: flex;
-  gap: 10px;
-  min-height: 16px;
+  gap: 8px;
+  min-height: 20px;
   margin-top: 6px;
-  font-size: 11px;
+  font-size: 13px;
+}
+
+.ghud__debuff {
+  background: rgba(10, 14, 18, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  padding: 1px 7px;
 }
 
 /* --------------------------------------------------------------------------
