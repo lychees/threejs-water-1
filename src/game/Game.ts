@@ -40,8 +40,10 @@ import { loadShipModel, instantiateShip, SHIP_MODELS } from './ModelShips';
 import { Minimap } from './Minimap';
 import { Compass, type CompassMark } from './Compass';
 import { FEEL } from './PlayerConfig';
-import { ISLAND } from '../scene/Seafloor';
+import { ISLAND, seafloorHeight } from '../scene/Seafloor';
 import type { Terrain } from './terrain/Terrain';
+import { Towns, type GroundSampler, type TownSite } from './Towns';
+import { ShoreBatteries, BatteryBody } from './ShoreBatteries';
 
 /** 基座 glTF 船模归一化后的船长（米），缩放真实模型船型时以此为基准。 */
 const BASE_MODEL_LENGTH = 27;
@@ -98,6 +100,12 @@ export class Game {
   private readonly compassMarks: CompassMark[] = [];
   private readonly compassMarkPool: CompassMark[] = [];
   private supplies: Supplies | null = null;
+  /** 沿海城镇（真实点位/程序化自选），构造即生成。 */
+  private towns: Towns | null = null;
+  /** 岸防炮：模型异步加载完成前为 null。 */
+  private batteries: ShoreBatteries | null = null;
+  /** 地面高度采样（自定义：terrain.heightWorld；默认：seafloorHeight）。 */
+  private ground: GroundSampler = { height: seafloorHeight };
   private readonly camera: THREE.PerspectiveCamera;
   private readonly heightAt: WaveHeightAt;
   private readonly isRaining: () => boolean;
@@ -213,6 +221,40 @@ export class Game {
         terrain.sizeZ,
       );
     }
+
+    // ---- 沿海城镇 + 岸防炮：自定义海域用 Overpass 真实城镇点位（滤掉落海的），
+    // 默认迷雾岛或点位不足时程序化近岸自选 ----
+    this.ground = this.terrain
+      ? { height: (x, z) => this.terrain!.heightWorld(x, z) }
+      : { height: seafloorHeight };
+    const coastCenter = this.terrain
+      ? this.terrain.center
+      : { x: ISLAND.x, z: ISLAND.z };
+    const worldSites: TownSite[] = [];
+    if (this.terrain) {
+      for (const p of this.terrain.places) {
+        const w = this.terrain.latLonToWorld(p.lat, p.lon);
+        if (this.terrain.heightWorld(w.x, w.y) > 1) {
+          worldSites.push({ x: w.x, z: w.y, name: p.name });
+        }
+      }
+    }
+    this.towns = new Towns(this.ground, worldSites, coastCenter);
+    options.scene.add(this.towns.object);
+    void ShoreBatteries.deploy(
+      options.scene,
+      options.assets,
+      this.combat,
+      this.ground,
+      // 默认迷雾岛在 ~1.4km 外且近岸一带是浅滩——直接以战场中心（原点）为
+      // 搜索心，半径 = 玩家边界 760 + 射程余量，炮位才够得着玩家；
+      // 自定义海域搜索圈本就在玩家活动圈内，无需约束
+      this.terrain ? coastCenter : { x: 0, z: 0 },
+      this.terrain ? Math.min(this.terrain.sizeX, this.terrain.sizeZ) * 0.45 : 760 + 130,
+      this.terrain ? 4 : 2,
+    ).then((b) => {
+      this.batteries = b;
+    });
 
     this.fanL = makeFanViz(options.scene);
     this.fanR = makeFanViz(options.scene);
@@ -368,6 +410,7 @@ export class Game {
   /** R 重开：原地复位，不刷新页面。 */
   private restart(): void {
     this.fleet.reset();
+    this.batteries?.reset();
     this.player.revive();
     if (this.terrain) this.player.position.copy(this.terrain.findSpawn());
     this.kills = 0;
@@ -499,6 +542,8 @@ export class Game {
       for (const e of this.fleet.enemies) this.keepInDeepWater(e);
     }
     this.resolveShipCollisions();
+    // 岸防炮：150m 内对玩家开火（带提前量的抛物线弹）
+    this.batteries?.update(dt, player);
 
     // ---- 补给 ----
     this.supplies?.update(dt, this.time, (event) => {
@@ -527,6 +572,17 @@ export class Game {
       if (!wrap) wrap = this.targetPool[i + 1] = { ship: enemies[i], isPlayer: false };
       wrap.ship = enemies[i];
       targets.push(wrap);
+    }
+    // 岸防炮也是可被玩家炮弹命中的目标（敌弹/岸弹 fromPlayer=false 不会误伤它）
+    if (this.batteries) {
+      for (const b of this.batteries.batteries) {
+        if (b.destroyed) continue;
+        const i = targets.length; // 池下标跟在已用目标后
+        let wrap = this.targetPool[i];
+        if (!wrap) wrap = this.targetPool[i] = { ship: b.body as unknown as GameShip, isPlayer: false };
+        wrap.ship = b.body as unknown as GameShip;
+        targets.push(wrap);
+      }
     }
     this.combat.update(dt, targets, this.onHit);
 
@@ -607,7 +663,7 @@ export class Game {
     );
     this.hud.updateEnemyHpBars(dt, this.fleet.enemies, this.camera);
     if ((this.mmFrame & 3) === 0) {
-      this.minimap.draw(player, this.fleet.enemies, this.supplies); // 小地图 ~15fps 节流
+      this.minimap.draw(player, this.fleet.enemies, this.supplies, this.batteries); // 小地图 ~15fps 节流
     }
     // 罗盘隔帧（刻度 + 方位标记）
     if ((this.mmFrame & 1) === 0) this.drawCompass();
@@ -642,6 +698,12 @@ export class Game {
           item.kind === 'loot' ? '#ffd76e' : '#b5854a',
           'dot',
         );
+      }
+    }
+    // 岸防炮：深红方块（摧毁后消失）
+    if (this.batteries) {
+      for (const b of this.batteries.batteries) {
+        if (!b.destroyed) push(bearing(b.body.position.x, b.body.position.z), '#c03028', 'sq');
       }
     }
     // 陆地方向：自定义海域指区域中心，默认海域指迷雾岛
@@ -879,6 +941,20 @@ export class Game {
         size: dmgFontSize(dmg),
       });
     }
+    // 岸防炮击毁结算：大爆炸 + 岸边水面掉 1~2 个战利品箱
+    if (sunk && target.ship instanceof BatteryBody && this.batteries) {
+      const b = this.batteries.batteries.find((x) => x.body === target.ship);
+      if (b) {
+        this.batteries.destroy(b);
+        this.hud.floatText('+1 岸防炮');
+        const drops = 1 + (Math.random() < 0.5 ? 1 : 0);
+        for (let i = 0; i < drops; i++) {
+          const w = this.findWaterNear(b.body.position, 90);
+          this.supplies?.drop('loot', w.x, w.y);
+        }
+      }
+      return; // 固定炮位不吃 debuff
+    }
     if (!sunk) {
       // 大雨天不新附着火
       for (const key of target.ship.rollDebuffs(this.isRaining())) {
@@ -890,6 +966,34 @@ export class Game {
     }
     // 玩家被打沉由 update 里的 player.sinking 检查统一接管（含着火致死）
   };
+
+  /**
+   * 在 pos 附近找水面点（掉补给用）：沿高度下降最快的方向走到水下，
+   * 找不到就往随机方向试几杆，兜底返回原点（默认海域全图是水）。
+   */
+  private findWaterNear(pos: THREE.Vector3, maxDist: number): THREE.Vector2 {
+    if (this.ground.height(pos.x, pos.z) < -1) return new THREE.Vector2(pos.x, pos.z);
+    // 先沿负梯度（朝海）走
+    const g = 8;
+    const gx = this.ground.height(pos.x + g, pos.z) - this.ground.height(pos.x - g, pos.z);
+    const gz = this.ground.height(pos.x, pos.z + g) - this.ground.height(pos.x, pos.z - g);
+    const len = Math.hypot(gx, gz);
+    if (len > 1e-4) {
+      for (const d of [30, 60, maxDist]) {
+        const x = pos.x - (gx / len) * d;
+        const z = pos.z - (gz / len) * d;
+        if (this.ground.height(x, z) < -1) return new THREE.Vector2(x, z);
+      }
+    }
+    for (let i = 0; i < 8; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const d = 20 + Math.random() * maxDist;
+      const x = pos.x + Math.cos(a) * d;
+      const z = pos.z + Math.sin(a) * d;
+      if (this.ground.height(x, z) < -1) return new THREE.Vector2(x, z);
+    }
+    return new THREE.Vector2(pos.x, pos.z);
+  }
 
   /** 椭圆碰撞体 + 撞击伤害，旧 js/main.js resolveShipCollisions 直译。 */
   private resolveShipCollisions(): void {

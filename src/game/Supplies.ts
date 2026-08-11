@@ -39,11 +39,11 @@ export class Supplies {
   readonly items: Supply[] = [];
 
   private constructor(
-    scene: THREE.Scene,
+    private readonly scene: THREE.Scene,
     private readonly heightAt: WaveHeightAt,
     private readonly player: GameShip,
-    barrelTemplate: THREE.Object3D,
-    chestTemplate: THREE.Object3D,
+    private readonly barrelTemplate: THREE.Object3D,
+    private readonly chestTemplate: THREE.Object3D,
     private readonly isWater: ((x: number, z: number) => boolean) | null,
   ) {
     for (let i = 0; i < SUPPLY_COUNT; i++) {
@@ -134,5 +134,25 @@ export class Supplies {
 
   get repairAmount(): number {
     return REPAIR_AMOUNT;
+  }
+
+  /**
+   * 一次性掉落（岸防炮击毁战利品）：在指定点放一个补给，拾取后按常规重刷逻辑
+   * 并入巡航池（items 数量会缓慢涨，量小无碍）。
+   */
+  drop(kind: SupplyKind, x: number, z: number): void {
+    const template = kind === 'loot' ? this.chestTemplate : this.barrelTemplate;
+    const object = template.clone(true);
+    object.scale.setScalar(kind === 'loot' ? 1.6 : 1.4);
+    object.position.set(x, 0, z);
+    object.rotation.y = Math.random() * Math.PI * 2;
+    this.scene.add(object);
+    this.items.push({
+      kind,
+      object,
+      active: true,
+      respawnIn: 0,
+      phase: Math.random() * Math.PI * 2,
+    });
   }
 }

@@ -28,13 +28,23 @@ const TIMEOUT_MS = 45_000;
 /** 一条折线：经纬度对序列 [lat, lon, lat, lon, ...]。 */
 export type Coastline = Float32Array;
 
+export interface PlaceNode {
+  lat: number;
+  lon: number;
+  name: string | null;
+  place: string;
+}
+
 export interface CoastlineData {
   lines: Coastline[];
   nodeCount: number;
+  /** bbox 内的真实城镇点位（无数据为空数组）。 */
+  places: PlaceNode[];
 }
 
 export async function fetchCoastlines(bbox: BBox): Promise<CoastlineData> {
-  const query = `[out:json][timeout:40];way["natural"="coastline"](${bbox.s},${bbox.w},${bbox.n},${bbox.e});(._;>;);out body;`;
+  // 海岸线 way + 城镇点位（place=city/town/village）一次查询，省一次限流
+  const query = `[out:json][timeout:40];(way["natural"="coastline"](${bbox.s},${bbox.w},${bbox.n},${bbox.e});node["place"~"city|town|village"](${bbox.s},${bbox.w},${bbox.n},${bbox.e}););(._;>;);out body;`;
 
   // 依次尝试各镜像：单站 504/超时/网络错误都回退下一站
   let res: Response | null = null;
@@ -64,14 +74,25 @@ export async function fetchCoastlines(bbox: BBox): Promise<CoastlineData> {
   }
   if (!res) throw lastError instanceof Error ? lastError : new Error('所有 Overpass 镜像都不可用');
   const json = (await res.json()) as {
-    elements: { type: string; id: number; lat?: number; lon?: number; nodes?: number[] }[];
+    elements: {
+      type: string;
+      id: number;
+      lat?: number;
+      lon?: number;
+      nodes?: number[];
+      tags?: { place?: string; name?: string };
+    }[];
   };
 
   const nodes = new Map<number, [number, number]>();
   const ways: number[][] = [];
+  const places: PlaceNode[] = [];
   for (const el of json.elements) {
     if (el.type === 'node' && el.lat !== undefined && el.lon !== undefined) {
       nodes.set(el.id, [el.lat, el.lon]);
+      if (el.tags?.place) {
+        places.push({ lat: el.lat, lon: el.lon, name: el.tags.name ?? null, place: el.tags.place });
+      }
     } else if (el.type === 'way' && el.nodes && el.nodes.length >= 2) {
       ways.push(el.nodes);
     }
@@ -89,5 +110,5 @@ export async function fetchCoastlines(bbox: BBox): Promise<CoastlineData> {
     }
     if (n >= 4) lines.push(line.subarray(0, n) as Coastline);
   }
-  return { lines, nodeCount: nodes.size };
+  return { lines, nodeCount: nodes.size, places };
 }

@@ -276,6 +276,39 @@ export class Combat {
     );
   }
 
+  /**
+   * 岸防炮弹：从炮位向目标点打抛物线（水平初速由飞行时间反推，vy = ½g·tof）。
+   * spread 为角散布（弧度），岸防炮刻意不准。
+   */
+  fireBatteryShot(from: THREE.Vector3, aimX: number, aimZ: number, tof: number, spread: number): void {
+    const dx = aimX - from.x;
+    const dz = aimZ - from.z;
+    const start = from.clone();
+    start.y += 2;
+    const vel = new THREE.Vector3(dx / tof, 0.5 * BALL_GRAVITY * tof, dz / tof);
+    // 角散布：水平面内偏转
+    const hs = Math.hypot(vel.x, vel.z);
+    const ang = Math.atan2(vel.x, vel.z) + (Math.random() - 0.5) * spread * 2;
+    vel.x = Math.sin(ang) * hs;
+    vel.z = Math.cos(ang) * hs;
+    const mesh = new THREE.Mesh(this.ballGeo, this.ballMat);
+    mesh.position.copy(start);
+    this.scene.add(mesh);
+    this.balls.push({ mesh, vel, fromPlayer: false, life: tof + 2, damageMul: 1 });
+    // 炮口硝烟
+    this.bursts.push(
+      new Burst(this.scene, start, {
+        count: this.n(8),
+        color: 0xcccccc,
+        speed: 1.5,
+        up: 1.5,
+        life: 0.9,
+        size: 1.6,
+        gravity: -0.5,
+      }),
+    );
+  }
+
   splash(pos: THREE.Vector3): void {    this.bursts.push(
       new Burst(this.scene, pos, {
         count: this.n(22),

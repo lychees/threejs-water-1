@@ -24,7 +24,13 @@ export class Terrain {
   readonly mesh: THREE.Mesh;
   readonly center = CUSTOM_CENTER;
 
-  private constructor(private readonly field: HeightField) {
+  private constructor(
+    private readonly field: HeightField,
+    bbox: BBox,
+    /** 真实城镇点位（世界坐标尚未转换，存原始经纬度）。 */
+    readonly places: import('./overpass').PlaceNode[],
+  ) {
+    this.bboxRef = bbox;
     this.mesh = this.buildMesh();
   }
 
@@ -35,6 +41,7 @@ export class Terrain {
 
     // 缓存命中：跳过 Overpass，直接从海陆掩码重建高度场（确定性，结果一致）
     let cachedMask: Uint8Array | null = null;
+    let cachedPlaces: import('./overpass').PlaceNode[] = [];
     try {
       const raw = window.localStorage.getItem(cacheKey);
       if (raw) {
@@ -44,8 +51,12 @@ export class Terrain {
           for (let i = 0; i < bin.length; i++) cachedMask[i] = bin.charCodeAt(i);
         }
       }
+      // 城镇点位小缓存（JSON，几 KB；没有就程序化自选）
+      const rawPlaces = window.localStorage.getItem(placesCacheKey(bbox));
+      if (rawPlaces) cachedPlaces = JSON.parse(rawPlaces) as import('./overpass').PlaceNode[];
     } catch {
       cachedMask = null;
+      cachedPlaces = [];
     }
 
     // 真实高程与海岸线拉取并行（高程失败 → null → 合成高程回退，不阻塞）
@@ -56,8 +67,9 @@ export class Terrain {
       console.info('[terrain] 命中本地缓存，跳过 Overpass');
       field = buildFieldFromMask(bbox, cachedMask, await elevationPromise);
     } else {
-      const { lines, nodeCount } = await fetchCoastlines(bbox);
+      const { lines, nodeCount, places } = await fetchCoastlines(bbox);
       if (lines.length === 0) throw new Error('该区域没有海岸线数据');
+      cachedPlaces = places;
       console.info(`[terrain] 海岸线 ${lines.length} 条 / ${nodeCount} 节点，开始光栅化`);
       field = buildHeightField(bbox, lines, await elevationPromise);
       // 写缓存（147KB 掩码 → ~196KB base64，放得下 localStorage；写失败不碍事）
@@ -68,6 +80,7 @@ export class Terrain {
           bin += String.fromCharCode(...field.landMask.subarray(i, i + CHUNK));
         }
         window.localStorage.setItem(cacheKey, btoa(bin));
+        window.localStorage.setItem(placesCacheKey(bbox), JSON.stringify(cachedPlaces));
       } catch {
         // 存储满了就算了，下次再拉
       }
@@ -80,13 +93,27 @@ export class Terrain {
     if (ratio < 0.02 || ratio > 0.85) {
       throw new Error(`陆地占比异常（${(ratio * 100).toFixed(0)}%），换一片有岛有海的位置`);
     }
-    return new Terrain(field);
+    return new Terrain(field, bbox, cachedPlaces);
   }
 
   /** 战场局部坐标（区域中心为原点）的高度。 */
   height(x: number, z: number): number {
     return sampleHeight(this.field, x, z);
   }
+
+  /** 经纬度 → 世界坐标（选区线性映射）。 */
+  latLonToWorld(lat: number, lon: number): THREE.Vector2 {
+    // 需要 bbox——存一份
+    const b = this.bboxRef;
+    const fx = (lon - b.w) / (b.e - b.w);
+    const fz = (b.n - lat) / (b.n - b.s); // 行 0 = 北
+    return new THREE.Vector2(
+      (fx - 0.5) * this.field.sizeX + this.center.x,
+      (fz - 0.5) * this.field.sizeZ + this.center.z,
+    );
+  }
+
+  private bboxRef!: import('./overpass').BBox;
 
   /** 世界坐标高度。 */
   heightWorld(x: number, z: number): number {
@@ -245,6 +272,11 @@ export function maskCacheKey(bbox: BBox): string {
   return `web-ocean:terrain-mask:v2:${bbox.s},${bbox.w},${bbox.n},${bbox.e}`;
 }
 
+/** 城镇点位缓存键（随掩码一起写/删）。 */
+export function placesCacheKey(bbox: BBox): string {
+  return `web-ocean:terrain-places:v1:${bbox.s},${bbox.w},${bbox.n},${bbox.e}`;
+}
+
 /** 历史选区列表（新的在前）。 */
 export function listAreas(): AreaEntry[] {
   try {
@@ -281,6 +313,7 @@ export function removeArea(bbox: BBox): void {
   try {
     window.localStorage.setItem(AREAS_KEY, JSON.stringify(listAreas().filter((a) => !bboxEq(a, bbox))));
     window.localStorage.removeItem(maskCacheKey(bbox));
+    window.localStorage.removeItem(placesCacheKey(bbox));
   } catch {
     // 同上
   }

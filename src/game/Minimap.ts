@@ -10,6 +10,7 @@
 import { ISLAND } from '../scene/Seafloor';
 import type { GameShip } from './GameShip';
 import type { Supplies } from './Supplies';
+import type { ShoreBatteries } from './ShoreBatteries';
 
 export class Minimap {
   private readonly canvas: HTMLCanvasElement;
@@ -46,7 +47,12 @@ export class Minimap {
     root.append(this.canvas);
   }
 
-  draw(player: GameShip, enemies: readonly GameShip[], supplies: Supplies | null): void {
+  draw(
+    player: GameShip,
+    enemies: readonly GameShip[],
+    supplies: Supplies | null,
+    batteries: ShoreBatteries | null = null,
+  ): void {
     const ctx = this.ctx;
     const W = this.canvas.width;
     const cx = W / 2;
@@ -109,6 +115,17 @@ export class Minimap {
           3.5,
           item.kind === 'loot' ? '#ffd76e' : '#b5854a',
         );
+      }
+    }
+
+    // 岸防炮：深红小方块（被摧毁后消失）
+    if (batteries) {
+      ctx.fillStyle = '#c03028';
+      for (const b of batteries.batteries) {
+        if (b.destroyed) continue;
+        const bx = toMapX(b.body.position.x);
+        const by = toMapY(b.body.position.z);
+        ctx.fillRect(bx - 3, by - 3, 6, 6);
       }
     }
 
