@@ -9,7 +9,7 @@
 
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { storeBBox } from './terrain/Terrain';
+import { storeBBox, listAreas, removeArea, hasMaskCache } from './terrain/Terrain';
 import type { BBox } from './terrain/overpass';
 
 const MAX_SPAN = 0.2;
@@ -33,6 +33,7 @@ export function openAreaSelect(): Promise<AreaSelectResult> {
           <button type="button" class="btn areaselect__default">用回迷雾岛</button>
           <button type="button" class="btn areaselect__cancel">取消</button>
         </div>
+        <div class="areaselect__history"></div>
         <div class="areaselect__credit">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors</div>
       </div>`;
     document.body.append(overlay);
@@ -106,5 +107,43 @@ export function openAreaSelect(): Promise<AreaSelectResult> {
       done(null);
     });
     overlay.querySelector('.areaselect__cancel')!.addEventListener('click', () => done(undefined));
+
+    // ---- 历史选区：一键换回（有掩码缓存的秒开），可删除（连同缓存） ----
+    const historyEl = overlay.querySelector<HTMLElement>('.areaselect__history')!;
+    const renderHistory = (): void => {
+      const areas = listAreas();
+      historyEl.replaceChildren();
+      if (areas.length === 0) return;
+      const title = document.createElement('div');
+      title.className = 'areaselect__history-title';
+      title.textContent = '最近海域（⚡= 已缓存，秒加载）：';
+      historyEl.append(title);
+      for (const a of areas) {
+        const row = document.createElement('div');
+        row.className = 'areaselect__history-row';
+        const kmNS = (((a.n - a.s) * 111)).toFixed(1);
+        const kmEW = (((a.e - a.w) * 111 * Math.cos(((a.s + a.n) / 2) * Math.PI / 180))).toFixed(1);
+        const label = document.createElement('button');
+        label.type = 'button';
+        label.className = 'areaselect__history-pick';
+        label.textContent = `${hasMaskCache(a) ? '⚡ ' : ''}${((a.s + a.n) / 2).toFixed(2)}°, ${((a.w + a.e) / 2).toFixed(2)}°（${kmNS}×${kmEW}km）`;
+        label.addEventListener('click', () => {
+          storeBBox(a);
+          done(a);
+        });
+        const del = document.createElement('button');
+        del.type = 'button';
+        del.className = 'areaselect__history-del';
+        del.textContent = '×';
+        del.title = '删除该选区及其缓存';
+        del.addEventListener('click', () => {
+          removeArea(a);
+          renderHistory();
+        });
+        row.append(label, del);
+        historyEl.append(row);
+      }
+    };
+    renderHistory();
   });
 }

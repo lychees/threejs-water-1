@@ -1972,3 +1972,52 @@ body {
 .app-toast--out {
   opacity: 0;
 }
+
+/* 海域选区历史列表 */
+.areaselect__history {
+  margin-top: 10px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+.areaselect__history-title {
+  font-size: 12px;
+  color: rgba(232, 226, 213, 0.65);
+  margin-bottom: 4px;
+}
+
+.areaselect__history-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.areaselect__history-pick {
+  flex: 1;
+  text-align: left;
+  font-size: 12px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #e8e2d5;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.areaselect__history-pick:hover {
+  border-color: #e8a33d;
+}
+
+.areaselect__history-del {
+  width: 26px;
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(232, 226, 213, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.areaselect__history-del:hover {
+  color: #e8503a;
+  border-color: #e8503a;
+}

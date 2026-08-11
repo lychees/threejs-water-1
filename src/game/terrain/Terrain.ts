@@ -30,7 +30,7 @@ export class Terrain {
   static async load(bbox: BBox): Promise<Terrain> {
     // v2：海陆分类算法改为陆侧标记（v1 的边界洪水法在大陆海岸选区会把陆判成海），
     // 旧缓存掩码一律作废。
-    const cacheKey = `web-ocean:terrain-mask:v2:${bbox.s},${bbox.w},${bbox.n},${bbox.e}`;
+    const cacheKey = maskCacheKey(bbox);
 
     // 缓存命中：跳过 Overpass，直接从海陆掩码重建高度场（确定性，结果一致）
     let cachedMask: Uint8Array | null = null;
@@ -209,9 +209,71 @@ export function resolveBBox(): BBox | null {
 
 export function storeBBox(bbox: BBox | null): void {
   try {
-    if (bbox) window.localStorage.setItem(BBOX_STORAGE_KEY, [bbox.s, bbox.w, bbox.n, bbox.e].join(','));
-    else window.localStorage.removeItem(BBOX_STORAGE_KEY);
+    if (bbox) {
+      window.localStorage.setItem(BBOX_STORAGE_KEY, [bbox.s, bbox.w, bbox.n, bbox.e].join(','));
+      pushArea(bbox);
+    } else {
+      window.localStorage.removeItem(BBOX_STORAGE_KEY);
+    }
   } catch {
     // 隐私模式：当次会话有效
+  }
+}
+
+// ---------------------------------------------------------------- 选区历史与缓存管理
+
+const AREAS_KEY = 'web-ocean:areas:v1';
+const MAX_AREAS = 8;
+
+export interface AreaEntry extends BBox {
+  savedAt: number;
+}
+
+const bboxEq = (a: BBox, b: BBox): boolean =>
+  a.s === b.s && a.w === b.w && a.n === b.n && a.e === b.e;
+
+/** 掩码缓存键（v2 = 左陆右海分类法产物；删历史时连同删除）。 */
+export function maskCacheKey(bbox: BBox): string {
+  return `web-ocean:terrain-mask:v2:${bbox.s},${bbox.w},${bbox.n},${bbox.e}`;
+}
+
+/** 历史选区列表（新的在前）。 */
+export function listAreas(): AreaEntry[] {
+  try {
+    const raw = window.localStorage.getItem(AREAS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw) as AreaEntry[];
+    return Array.isArray(arr) ? arr.filter((a) => a && Number.isFinite(a.s)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function pushArea(bbox: BBox): void {
+  try {
+    const list = listAreas().filter((a) => !bboxEq(a, bbox));
+    list.unshift({ ...bbox, savedAt: Date.now() });
+    window.localStorage.setItem(AREAS_KEY, JSON.stringify(list.slice(0, MAX_AREAS)));
+  } catch {
+    // 存储满/隐私模式：历史不可用不碍事
+  }
+}
+
+/** 该选区是否已有本地掩码缓存（命中则免拉 Overpass 秒开）。 */
+export function hasMaskCache(bbox: BBox): boolean {
+  try {
+    return window.localStorage.getItem(maskCacheKey(bbox)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** 删除历史选区及其掩码缓存。 */
+export function removeArea(bbox: BBox): void {
+  try {
+    window.localStorage.setItem(AREAS_KEY, JSON.stringify(listAreas().filter((a) => !bboxEq(a, bbox))));
+    window.localStorage.removeItem(maskCacheKey(bbox));
+  } catch {
+    // 同上
   }
 }
