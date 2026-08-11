@@ -210,12 +210,12 @@ export class ShoreBatteries {
     }
   }
 
-  /** 击毁结算：大爆炸 + 标记，返回 true 表示本次击毁。 */
+  /** 击毁结算：大爆炸（普通命中 2 倍规模，双层错位） + 标记。 */
   destroy(b: Battery): void {
     b.destroyed = true;
     b.body.object.visible = false; // 残骸留石台太细——先整体隐藏
-    this.combat.explosion(b.body.position.clone().add(new THREE.Vector3(0, 2, 0)));
-    this.combat.explosion(b.body.position.clone().add(new THREE.Vector3(0, 4, 0)));
+    this.combat.explosion(b.body.position.clone().add(new THREE.Vector3(0, 2, 0)), 2);
+    this.combat.explosion(b.body.position.clone().add(new THREE.Vector3(0, 4.5, 0)), 1.5);
   }
 
   /** R 重开复位。 */

@@ -7,6 +7,7 @@
 
 import * as THREE from 'three/webgpu';
 import type { GameShip, WaveHeightAt } from './GameShip';
+import { Fire } from './Fire';
 
 const BALL_GRAVITY = 18; // 炮弹重力（比真实大，手感更 arcade）
 export { BALL_GRAVITY }; // 弹道预览与命中判定共用
@@ -144,6 +145,8 @@ class Ring {
 export class Combat {
   particleScale = 1; // 画质档位缩放粒子数量
   onSplash: (() => void) | null = null; // 落水音效钩子
+  /** 火焰特效层（持续燃烧/爆炸火球/炮口闪光的广告牌粒子）。 */
+  readonly fire: Fire;
 
   private readonly scene: THREE.Scene;
   private readonly heightAt: WaveHeightAt;
@@ -156,6 +159,12 @@ export class Combat {
   constructor(scene: THREE.Scene, heightAt: WaveHeightAt) {
     this.scene = scene;
     this.heightAt = heightAt;
+    this.fire = new Fire(scene);
+  }
+
+  /** 柱状广告牌需要相机位置，Game 构造后挂一次。 */
+  setCamera(camera: THREE.Camera): void {
+    this.fire.setCamera(camera);
   }
 
   /** 按画质档位缩放粒子数。 */
@@ -210,7 +219,8 @@ export class Combat {
       this.scene.add(mesh);
       this.balls.push({ mesh, vel, fromPlayer, life: 6, damageMul });
 
-      // 炮口硝烟
+      // 炮口火光（每门一帧级亮斑）+ 硝烟
+      this.fire.muzzleFlash(start);
       this.bursts.push(
         new Burst(this.scene, start, {
           count: this.n(8),
@@ -238,6 +248,7 @@ export class Combat {
     mesh.position.copy(start);
     this.scene.add(mesh);
     this.balls.push({ mesh, vel, fromPlayer: true, life: 6, damageMul });
+    this.fire.muzzleFlash(start);
     this.bursts.push(
       new Burst(this.scene, start, {
         count: this.n(8),
@@ -251,31 +262,7 @@ export class Combat {
     );
   }
 
-  /** 着火持续火焰（debuff 视觉）：火舌 + 黑烟。 */
-  firePuff(pos: THREE.Vector3): void {
-    this.bursts.push(
-      new Burst(this.scene, pos, {
-        count: this.n(6),
-        color: 0xff7a20,
-        speed: 1.0,
-        up: 3,
-        life: 0.7,
-        size: 1.5,
-        gravity: -3,
-      }),
-    );
-    this.bursts.push(
-      new Burst(this.scene, pos, {
-        count: this.n(4),
-        color: 0x444444,
-        speed: 0.8,
-        up: 2,
-        life: 1.2,
-        size: 2.0,
-        gravity: -1,
-      }),
-    );
-  }
+  /** 着火持续燃烧由 Fire.updateFires 接管（Game 每帧驱动），旧的概率冒泡已移除。 */
 
   /**
    * 岸防炮弹：从炮位向目标点打抛物线（水平初速由飞行时间反推，vy = ½g·tof）。
@@ -296,7 +283,8 @@ export class Combat {
     mesh.position.copy(start);
     this.scene.add(mesh);
     this.balls.push({ mesh, vel, fromPlayer: false, life: tof + 2, damageMul: 1 });
-    // 炮口硝烟
+    // 炮口火光 + 硝烟
+    this.fire.muzzleFlash(start);
     this.bursts.push(
       new Burst(this.scene, start, {
         count: this.n(8),
@@ -324,14 +312,17 @@ export class Combat {
     this.rings.push(new Ring(this.scene, pos));
   }
 
-  explosion(pos: THREE.Vector3): void {
+  explosion(pos: THREE.Vector3, scale = 1): void {
+    // 广告牌层：闪光 + 火球 + 火星 + 大烟（岸防炮击毁/沉船传 scale=2）
+    this.fire.blast(pos.clone(), scale);
+    const k = scale; // Burst 粒子数随规模
     // 木屑
     this.bursts.push(
       new Burst(this.scene, pos, {
-        count: this.n(26),
+        count: this.n(26 * k),
         color: 0x9a6a3a,
-        speed: 5,
-        up: 6,
+        speed: 5 * k,
+        up: 6 * k,
         life: 1.1,
         size: 0.9,
         gravity: 10,
@@ -340,10 +331,10 @@ export class Combat {
     // 硝烟
     this.bursts.push(
       new Burst(this.scene, pos, {
-        count: this.n(16),
+        count: this.n(16 * k),
         color: 0x555555,
-        speed: 1.8,
-        up: 3,
+        speed: 1.8 * k,
+        up: 3 * k,
         life: 1.6,
         size: 2.2,
         gravity: -0.6,
@@ -352,10 +343,10 @@ export class Combat {
     // 火花
     this.bursts.push(
       new Burst(this.scene, pos, {
-        count: this.n(10),
+        count: this.n(10 * k),
         color: 0xffc040,
-        speed: 4,
-        up: 5,
+        speed: 4 * k,
+        up: 5 * k,
         life: 0.5,
         size: 1.1,
         gravity: 6,
@@ -432,5 +423,9 @@ export class Combat {
       if (this.rings[i].update(dt)) this.rings[wr++] = this.rings[i];
     }
     this.rings.length = wr;
+
+    // ---- 火焰特效层（画质缩放同步 + 广告牌粒子帧更新） ----
+    this.fire.particleScale = this.particleScale;
+    this.fire.update(dt);
   }
 }

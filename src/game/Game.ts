@@ -198,6 +198,7 @@ export class Game {
 
     this.combat = new Combat(options.scene, this.heightAt);
     this.combat.onSplash = () => this.audio.playSplash(0.7);
+    this.combat.setCamera(options.camera); // 火焰广告牌的柱状朝向用
     this.fleet = new EnemyFleet(options.scene, this.combat);
     this.fleet.densityCap = options.enemyDensity;
     this.hud = new GameHud(options.uiRoot);
@@ -600,12 +601,16 @@ export class Game {
     ships.push(player);
     for (const e of enemies) ships.push(e);
 
-    // ---- 沉船冒泡（沉船音效每艘一次） + 着火噼啪开关 ----
+    // ---- 沉船冒泡（沉船音效每艘一次 + 大爆） + 着火噼啪开关 ----
     let anyFire = false;
     for (const s of ships) {
       if (s.sinking && !s.dead && !this.sinkSounded.has(s)) {
         this.sinkSounded.add(s);
         this.audio.playSink();
+        // 沉船级爆炸（普通命中 2 倍规模）
+        const pos = this.scratch.copy(s.position);
+        pos.y += 1.5;
+        this.combat.explosion(pos, 2);
       }
       if (!s.sinking && s.debuff.fire > 0) anyFire = true;
       if (!s.sinking || s.dead) continue;
@@ -619,19 +624,12 @@ export class Game {
     }
     this.audio.setFireBurning(anyFire);
 
-    // ---- debuff 粒子：着火冒火焰、漏水舷侧冒水花；大雨浇灭所有着火 ----
+    // ---- debuff 粒子：着火由 Fire 持续燃烧接管、漏水舷侧冒水花；大雨浇灭所有着火 ----
     for (const s of ships) {
       if (s.sinking || s.dead) continue;
       if (raining && s.debuff.fire > 0) {
         s.debuff.fire = 0;
         if (s === player) this.hud.floatText('大雨浇灭了火焰');
-      }
-      if (s.debuff.fire > 0 && Math.random() < dt * 10) {
-        const pos = this.scratch.copy(s.position);
-        pos.x += (Math.random() - 0.5) * 2;
-        pos.z += (Math.random() - 0.5) * 2;
-        pos.y += 1.5;
-        this.combat.firePuff(pos);
       }
       if (s.debuff.leak > 0 && Math.random() < dt * 1.5) {
         const pos = this.scratch.copy(s.position);
@@ -641,6 +639,8 @@ export class Game {
         this.combat.splash(pos);
       }
     }
+    // 持续燃烧：火舌/火星/烟柱/光晕（内部按 debuff.fire 与沉船状态挂/摘发射点）
+    this.combat.fire.updateFires(dt, ships);
 
     // ---- 游戏结束：沉船动画播一会儿再弹遮罩 ----
     if (this.state === 'over') {
@@ -735,6 +735,11 @@ export class Game {
   /** Panel 敌船密度滑杆：调低不杀现有敌船（只是不再补员），调高立即补。 */
   setEnemyDensity(n: number): void {
     this.fleet.densityCap = Math.round(THREE.MathUtils.clamp(n, 1, 6));
+  }
+
+  /** 画质档位同步粒子预算（App 每帧调用，与 Phenomena 的 particleScale 同一惯例）。 */
+  setParticleScale(v: number): void {
+    this.combat.particleScale = v;
   }
 
   /**

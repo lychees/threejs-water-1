@@ -2387,6 +2387,8 @@ class App {
     const preset = getPreset(this.state.preset);
 
     // 天空现象层：雾团跟预设雾量、彩虹跟雨停、极光跟夜+moonlit/arctic、流星跟晴夜
+    const particleScale = QUALITY_TIERS[this.state.quality].propsDetail >= 0.75 ? 1 : 0.5;
+    this.game?.setParticleScale(particleScale); // 战斗粒子（含火焰层）同档位
     this.phenomena.cameraQuaternion = this.camera.quaternion;
     this.phenomena.update(dt, {
       cameraPosition: this.camera.position,
@@ -2397,7 +2399,7 @@ class App {
       presetId: this.state.preset,
       windDirection: preset.sea.windDirection,
       windSpeed: this.state.windSpeed,
-      particleScale: QUALITY_TIERS[this.state.quality].propsDetail >= 0.75 ? 1 : 0.5,
+      particleScale,
     });
 
     this.underwater.setParams({
