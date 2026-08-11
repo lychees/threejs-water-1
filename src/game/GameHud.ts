@@ -42,6 +42,7 @@ export class GameHud {
   private readonly debuffFire: HTMLElement;
   private readonly debuffLeak: HTMLElement;
   private readonly debuffSail: HTMLElement;
+  private readonly debuffBow: HTMLElement;
   private readonly elevationEl: HTMLElement;
   private readonly overEl: HTMLElement;
   private readonly overKills: HTMLElement;
@@ -87,7 +88,8 @@ export class GameHud {
     this.debuffFire = el('span', 'ghud__debuff', '');
     this.debuffLeak = el('span', 'ghud__debuff', '');
     this.debuffSail = el('span', 'ghud__debuff', '');
-    debuffs.append(this.debuffFire, this.debuffLeak, this.debuffSail);
+    this.debuffBow = el('span', 'ghud__debuff', '');
+    debuffs.append(this.debuffFire, this.debuffLeak, this.debuffSail, this.debuffBow);
     status.append(debuffs);
 
     // ---- 部件状态条（🛡船体 + 按船型 3~4 个部件，迷你血条绿→黄→红→黑） ----
@@ -157,6 +159,7 @@ export class GameHud {
     fire: '',
     leak: '',
     sailDebuff: '',
+    bowWound: '',
     elevation: '',
     charging: false,
   };
@@ -235,6 +238,12 @@ export class GameHud {
     if (sailD !== c.sailDebuff) {
       c.sailDebuff = sailD;
       this.debuffSail.textContent = sailD;
+    }
+    // 艏部受创（暴击附加减速）
+    const bow = player.bowHitT > 0 ? `💥 ${Math.ceil(player.bowHitT)}s` : '';
+    if (bow !== c.bowWound) {
+      c.bowWound = bow;
+      this.debuffBow.textContent = bow;
     }
     // 射角：蓄力时高亮，平时淡显（方位正=偏船头/负=偏船尾）
     const azText = azimuthDeg === 0 ? '' : ` 方位 ${azimuthDeg > 0 ? '艏' : '艉'}${Math.abs(azimuthDeg)}°`;

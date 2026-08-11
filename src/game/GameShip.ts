@@ -111,6 +111,16 @@ export class GameShip {
   hurtT = 0; // 被玩家攻击后血条显示剩余秒数（Game 驱动）
   cid = 0; // 碰撞结算冷却用的配对 id（Game 分配）
 
+  /** 艏部受创计时（秒，>0 时极速 ×0.75；重复命中刷新）。 */
+  bowHitT = 0;
+
+  // ---- 受击摇晃：阻尼振荡状态（叠加在姿态输出层，不污染浮力 pitch/roll） ----
+  /** 摇晃角位移（弧度，验证/调试可读）。 */
+  shakeRoll = 0;
+  shakePitch = 0;
+  private shakeRollVel = 0;
+  private shakePitchVel = 0;
+
   /** 各 debuff 剩余秒数。 */
   readonly debuff: Record<DebuffKind, number> = { fire: 0, leak: 0, sail: 0 };
 
@@ -158,12 +168,13 @@ export class GameShip {
     return this.scratchForward.set(Math.sin(this.heading), 0, Math.cos(this.heading));
   }
 
-  /** 速度乘区（漏水 ×0.7、破帆 ×0.6、船桨毁损 ×0.5，乘法叠加）。 */
+  /** 速度乘区（漏水 ×0.7、破帆 ×0.6、船桨毁损 ×0.5、艏部受创 ×0.75，乘法叠加）。 */
   get speedMul(): number {
     let m = 1;
     if (this.debuff.leak > 0) m *= DEBUFF_DEFS.leak.speedMul;
     if (this.debuff.sail > 0) m *= DEBUFF_DEFS.sail.speedMul;
     if (this.partDestroyed('oars')) m *= OARS_BROKEN_SPEED_MUL;
+    if (this.bowHitT > 0) m *= 0.75; // 艏部受创
     return m;
   }
 
@@ -254,6 +265,24 @@ export class GameShip {
     this.sinkT = 0;
     this.sinkDir = Math.random() < 0.5 ? 1 : -1;
     this.debuff.fire = this.debuff.leak = this.debuff.sail = 0; // 沉船清除 debuff
+    this.bowHitT = 0;
+  }
+
+  /**
+   * 受击摇晃冲量：舷侧中弹向对侧横摇、艏部中弹后仰（ pitch 负 = 抬艏）。
+   * 幅度随伤害缩放并封顶（重击猛摇但不翻船）。碰撞传放大后的伤害。
+   */
+  applyHitShake(hitPos: THREE.Vector3, dmg: number): void {
+    const dx = hitPos.x - this.position.x;
+    const dz = hitPos.z - this.position.z;
+    const sinH = Math.sin(this.heading);
+    const cosH = Math.cos(this.heading);
+    const along = dx * sinH + dz * cosH; // + 艏 / - 艉
+    const across = dx * -cosH + dz * sinH; // + 右舷 / - 左舷
+    const ls = this.lengthScale || 1;
+    const mag = THREE.MathUtils.clamp(dmg / 20, 0.4, 2.5);
+    this.shakeRollVel += THREE.MathUtils.clamp((-across / (3 * ls)) * 0.12 * mag, -0.16, 0.16);
+    this.shakePitchVel += THREE.MathUtils.clamp((-along / (4.5 * ls)) * 0.07 * mag, -0.09, 0.09);
   }
 
   /** 复位到可玩状态（R 重开）。 */
@@ -266,6 +295,9 @@ export class GameShip {
     this.pitch = 0;
     this.roll = 0;
     this.hurtT = 0;
+    this.bowHitT = 0;
+    this.shakeRoll = this.shakePitch = 0;
+    this.shakeRollVel = this.shakePitchVel = 0;
     this.debuff.fire = this.debuff.leak = this.debuff.sail = 0;
     for (const p of this.parts) p.hp = p.maxHp; // 部件一并修复
     this.restoreMastVisual();
@@ -315,6 +347,16 @@ export class GameShip {
     }
     if (this.debuff.leak > 0) this.debuff.leak -= dt;
     if (this.debuff.sail > 0) this.debuff.sail -= dt;
+    if (this.bowHitT > 0) this.bowHitT -= dt;
+
+    // ---- 受击摇晃：二阶阻尼振荡（ω=6 rad/s、ζ=0.4，~1.5s 衰减），
+    // 状态独立于浮力，输出层叠加 ----
+    const SW = 6;
+    const SZ = 0.4;
+    this.shakeRollVel += (-SW * SW * this.shakeRoll - 2 * SZ * SW * this.shakeRollVel) * dt;
+    this.shakeRoll += this.shakeRollVel * dt;
+    this.shakePitchVel += (-SW * SW * this.shakePitch - 2 * SZ * SW * this.shakePitchVel) * dt;
+    this.shakePitch += this.shakePitchVel * dt;
 
     // ---- 浮力：采样船头/船尾/左舷/右舷四点波高（随船长缩放） ----
     const ls = this.lengthScale;
@@ -369,9 +411,14 @@ export class GameShip {
     this.applyPose();
   }
 
-  /** 旧版 heading/pitch/roll → 基座 +X 船头模型的欧拉角，换算见文件头注释。 */
+  /** 旧版 heading/pitch/roll → 基座 +X 船头模型的欧拉角，换算见文件头注释。
+   *  受击摇晃在输出层叠加（浮力状态不被污染）。 */
   private applyPose(): void {
-    this.object.rotation.set(this.roll, this.heading - Math.PI / 2, -this.pitch);
+    this.object.rotation.set(
+      this.roll + this.shakeRoll,
+      this.heading - Math.PI / 2,
+      -(this.pitch + this.shakePitch),
+    );
   }
 
   /** 朝目标角度转向，返回剩余角差。 */

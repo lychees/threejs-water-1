@@ -1631,6 +1631,25 @@ export class AudioSystem {
     this.trackVoice(thud, thudGain);
   }
 
+  /** 暴击命中：正常碎裂声 + 55Hz 低频重击托底（比 playCollision 短促）。 */
+  playCritHit(): void {
+    this.playHit();
+    const ctx = this.ctx;
+    if (ctx === null || !this.canPlay()) return;
+    if (!this.acquireVoice()) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = 55;
+    const gain = ctx.createGain();
+    envelope(gain.gain, now, 0.005, HIT_LEVEL * 1.2, 0.28);
+    osc.connect(gain);
+    gain.connect(this.airBus);
+    osc.start(now);
+    osc.stop(now + 0.32);
+    this.trackVoice(osc, gain);
+  }
+
   /** Pickup chime: two rising triangle notes. A UI sound — never muffled. */
   playPickup(): void {
     const ctx = this.ctx;

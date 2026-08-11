@@ -57,6 +57,10 @@ const ELEVATION_STEPS = [2, 4, 5.5, 7.5, 9.5, 12, 14] as const;
 /** 水平射角上限（弧度）：舷炮 ±57°，艏炮 ±20°。 */
 const AZIMUTH_MAX = 1.0;
 const AZIMUTH_MAX_BOW = 0.35;
+/** 艏艉暴击：命中点在船长两端 25% 区域 = 伤害 ×1.6；艏部暴击另附 6s 减速。 */
+const CRIT_MUL = 1.6;
+const CRIT_ZONE = 0.75; // 局部纵坐标 |along|/(4.5×ls) 超过即为艏/艉 25%
+const BOW_WOUND_SECONDS = 6; // 艏部受创减速时长（×0.75）
 
 // ---- 船只碰撞（椭圆碰撞体 + 撞击伤害），旧 js/main.js 同名单元 ----
 const COLLISION_MIN_SPEED = 3; // 相对速度低于此值不计伤害
@@ -1059,37 +1063,64 @@ export class Game {
   // ------------------------------------------------------------------ 命中与碰撞
 
   private readonly onHit = (ball: Cannonball, target: HitTarget, hitPos: THREE.Vector3): void => {
+    // ---- 艏艉暴击：命中点投影到船头-船尾轴，两端 25% 区域 ×1.6（与部件分派独立叠加） ----
+    const ship = target.ship;
+    let crit = false;
+    let bowHit = false;
+    if (ship instanceof GameShip) {
+      const dx = hitPos.x - ship.position.x;
+      const dz = hitPos.z - ship.position.z;
+      const along01 =
+        (dx * Math.sin(ship.heading) + dz * Math.cos(ship.heading)) / (4.5 * (ship.lengthScale || 1));
+      crit = Math.abs(along01) > CRIT_ZONE;
+      bowHit = along01 > CRIT_ZONE;
+    }
     const base = target.isPlayer ? 12 : 20;
-    const dmg = base * (ball.damageMul ?? 1);
-    this.audio.playHit();
+    const dmg = base * (ball.damageMul ?? 1) * (crit ? CRIT_MUL : 1);
+    if (crit) this.audio.playCritHit(); // 暴击音效更沉
+    else this.audio.playHit();
+    // 受击摇晃（暴击幅度 ×1.5）：舷侧中弹向对侧摇、艏部中弹后仰
+    if (ship instanceof GameShip) ship.applyHitShake(hitPos, dmg * (crit ? 1.5 : 1));
+    // 艏部受创：6s 极速 ×0.75（与漏水/破帆乘法叠加，重复命中刷新）
+    if (bowHit && ship instanceof GameShip) {
+      ship.bowHitT = BOW_WOUND_SECONDS;
+      if (!target.isPlayer) {
+        this.hud.floatTextAt('敌船艏部受创！', ship.position, this.camera, { color: '#ffd76e' });
+      }
+    }
     // ---- 部位伤害：甲板以上命中分派到部件（部件吃 60%，40% 溢出船体；
     // 部件已毁则全额打船体）。选这个模型是因为每发炮弹都保持沉船威胁，
     // 击杀节奏不被部件血量稀释，瞄高处则换来结构性削弱 ----
     let hullDmg = dmg;
     let broken: ShipPart[] = [];
-    if (target.ship instanceof GameShip && target.ship.parts.length > 0) {
-      const kind = this.assignPart(target.ship, hitPos);
+    if (ship instanceof GameShip && ship.parts.length > 0) {
+      const kind = this.assignPart(ship, hitPos);
       if (kind !== null) {
-        broken = target.ship.damagePart(kind, dmg * 0.6);
+        broken = ship.damagePart(kind, dmg * 0.6);
         hullDmg = dmg * 0.4;
       }
     }
-    const sunk = target.ship.takeDamage(hullDmg);
+    const sunk = ship.takeDamage(hullDmg);
     for (const p of broken) {
       if (target.isPlayer) {
         this.hud.floatText(PART_INFO[p.kind].brokenText);
       } else {
-        this.hud.floatTextAt(`敌船${PART_INFO[p.kind].brokenText}`, target.ship.position, this.camera);
+        this.hud.floatTextAt(`敌船${PART_INFO[p.kind].brokenText}`, ship.position, this.camera);
       }
     }
     if (target.isPlayer) this.hud.hitFlash(); // 受击红晕
     if (!target.isPlayer && ball.fromPlayer) {
-      // 玩家造成的伤害：白字漂浮 + 敌船血条
-      target.ship.hurtT = ENEMY_HP_BAR_TIME;
-      this.hud.floatTextAt(`-${Math.round(dmg)}`, target.ship.position, this.camera, {
-        color: '#ffffff',
-        size: dmgFontSize(dmg),
-      });
+      // 玩家造成的伤害：白字漂浮 + 敌船血条；暴击金色大字
+      ship.hurtT = ENEMY_HP_BAR_TIME;
+      this.hud.floatTextAt(
+        crit ? `暴击！-${Math.round(dmg)}` : `-${Math.round(dmg)}`,
+        ship.position,
+        this.camera,
+        {
+          color: crit ? '#ffd76e' : '#ffffff',
+          size: dmgFontSize(dmg) * (crit ? 1.25 : 1),
+        },
+      );
     }
     // 岸防炮击毁结算：大爆炸 + 岸边水面掉 1~2 个战利品箱
     if (sunk && target.ship instanceof BatteryBody && this.batteries) {
@@ -1253,6 +1284,9 @@ export class Game {
             this.audio.playCollision(); // 厚重撞击声，区别于炮击命中
             a.takeDamage(dmgA);
             b.takeDamage(dmgB);
+            // 碰撞双方受击摇晃（比普通炮击更猛）
+            a.applyHitShake(mid, dmgA * 2);
+            b.applyHitShake(mid, dmgB * 2);
             if (a === this.player || b === this.player) this.hud.hitFlash();
             // 玩家造成的撞击伤害：敌船飘白字 + 亮血条
             for (const [s, d] of [
