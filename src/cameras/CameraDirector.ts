@@ -415,6 +415,25 @@ export class CameraDirector {
       this.camera.quaternion.slerpQuaternions(this.fromQuaternion, this.desiredQuaternion, t);
     }
 
+    // 开炮后坐：小幅随机位移，~0.15s 衰减。正弦叠频伪随机，不产生分配；
+    // 只由 Game 的开炮事件触发，不影响任何确定性采集（采集不开炮）。
+    if (this.shake > 0) {
+      this.shake = Math.max(0, this.shake - dt / 0.15);
+      this.shakeClock += dt;
+      const mag = this.shake * this.shake * 0.55; // 平方衰减，尾段收敛快
+      const t = this.shakeClock;
+      this.camera.position.x += Math.sin(t * 97.3) * mag;
+      this.camera.position.y += Math.sin(t * 131.7 + 1.7) * mag * 0.6;
+      this.camera.position.z += Math.sin(t * 113.1 + 3.4) * mag;
+    }
+  }
+
+  private shake = 0;
+  private shakeClock = 0;
+
+  /** 开炮后坐触发（幅度叠加，封顶 0.2）。 */
+  kick(amount = 0.12): void {
+    this.shake = Math.min(0.2, this.shake + amount);
   }
 
   private updateOrbit(): void {

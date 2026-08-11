@@ -38,7 +38,9 @@ import {
 } from './Shipyard';
 import { loadShipModel, instantiateShip, SHIP_MODELS } from './ModelShips';
 import { Minimap } from './Minimap';
+import { Compass, type CompassMark } from './Compass';
 import { FEEL } from './PlayerConfig';
+import { ISLAND } from '../scene/Seafloor';
 import type { Terrain } from './terrain/Terrain';
 
 /** 基座 glTF 船模归一化后的船长（米），缩放真实模型船型时以此为基准。 */
@@ -67,6 +69,8 @@ export interface GameOptions {
   controls: ShipController;
   /** 基座音频系统（战斗音效走它的合成总线，音量滑杆即生效）。 */
   audio: AudioSystem;
+  /** 开炮镜头后坐（App 注入，驱动 CameraDirector）。 */
+  onCannonFire: () => void;
   /** 25 船属性表（ships.json 映射完成；加载失败时各项为 FALLBACK_STATS）。 */
   shipStats: Record<number, ShipStats>;
   /** 同屏敌船基准数（Panel 滑杆，1~6）。 */
@@ -88,6 +92,11 @@ export class Game {
   private readonly hud: GameHud;
   private readonly audio: AudioSystem;
   private readonly minimap: Minimap;
+  private readonly compass: Compass;
+  private readonly onCannonFire: () => void;
+  /** 罗盘标记复用池（每 2 帧重建引用，不新建对象）。 */
+  private readonly compassMarks: CompassMark[] = [];
+  private readonly compassMarkPool: CompassMark[] = [];
   private supplies: Supplies | null = null;
   private readonly camera: THREE.PerspectiveCamera;
   private readonly heightAt: WaveHeightAt;
@@ -181,6 +190,8 @@ export class Game {
     this.fleet.densityCap = options.enemyDensity;
     this.hud = new GameHud(options.uiRoot);
     this.minimap = new Minimap(options.uiRoot);
+    this.compass = new Compass(options.uiRoot);
+    this.onCannonFire = options.onCannonFire;
 
     // ---- 自定义海域：地形入场 + 出生点/活动范围/小地图轮廓 ----
     this.terrain = options.terrain;
@@ -595,9 +606,48 @@ export class Game {
       this.chargeL !== null || this.chargeR !== null || this.chargeBow !== null,
     );
     this.hud.updateEnemyHpBars(dt, this.fleet.enemies, this.camera);
-    if ((this.mmFrame++ & 3) === 0) {
+    if ((this.mmFrame & 3) === 0) {
       this.minimap.draw(player, this.fleet.enemies, this.supplies); // 小地图 ~15fps 节流
     }
+    // 罗盘隔帧（刻度 + 方位标记）
+    if ((this.mmFrame & 1) === 0) this.drawCompass();
+    this.mmFrame++;
+  }
+
+  /** 罗盘数据装配（复用池，零分配）与绘制。 */
+  private drawCompass(): void {
+    const marks = this.compassMarks;
+    marks.length = 0;
+    const pool = this.compassMarkPool;
+    const pp = this.player.position;
+    const bearing = (x: number, z: number): number => Math.atan2(x - pp.x, -(z - pp.z));
+    let n = 0;
+    const push = (b: number, color: string, kind: CompassMark['kind']): void => {
+      let m = pool[n];
+      if (!m) m = pool[n] = { bearing: 0, color: '', kind: 'dot' };
+      m.bearing = b;
+      m.color = color;
+      m.kind = kind;
+      n++;
+      marks.push(m);
+    };
+    for (const e of this.fleet.enemies) {
+      if (!e.sinking) push(bearing(e.position.x, e.position.z), e.mapColor, 'tri');
+    }
+    if (this.supplies) {
+      for (const item of this.supplies.items) {
+        if (!item.active) continue;
+        push(
+          bearing(item.object.position.x, item.object.position.z),
+          item.kind === 'loot' ? '#ffd76e' : '#b5854a',
+          'dot',
+        );
+      }
+    }
+    // 陆地方向：自定义海域指区域中心，默认海域指迷雾岛
+    const land = this.terrain ? this.terrain.center : ISLAND;
+    push(bearing(land.x, land.z), '#5a9a6a', 'sq');
+    this.compass.draw(this.player.heading, marks);
   }
 
   /** 触屏摇杆输入（throttle/rudder 各 -1..1；0 = 松开不接管）。 */
@@ -646,6 +696,7 @@ export class Game {
     this.abort.abort();
     this.hud.dispose();
     this.minimap.dispose();
+    this.compass.dispose();
   }
 
   // ------------------------------------------------------------------ 输入
@@ -784,6 +835,7 @@ export class Game {
       azimuth: side < 0 ? this.azimuthL : this.azimuthR, // 水平射角（鼠标左右）
     });
     this.audio.playCannon();
+    this.onCannonFire();
     if (side < 0) {
       this.cooldownL = FEEL.RELOAD_TIME;
       this.primeL = 0;
@@ -806,6 +858,7 @@ export class Game {
       azimuth: this.azimuthBow,
     });
     this.audio.playCannon();
+    this.onCannonFire();
     this.cooldownBow = FEEL.BOW_RELOAD;
     this.primeBow = 0;
   }
@@ -817,6 +870,7 @@ export class Game {
     const dmg = base * (ball.damageMul ?? 1);
     this.audio.playHit();
     const sunk = target.ship.takeDamage(dmg);
+    if (target.isPlayer) this.hud.hitFlash(); // 受击红晕
     if (!target.isPlayer && ball.fromPlayer) {
       // 玩家造成的伤害：白字漂浮 + 敌船血条
       target.ship.hurtT = ENEMY_HP_BAR_TIME;
@@ -922,6 +976,7 @@ export class Game {
             this.audio.playCollision(); // 厚重撞击声，区别于炮击命中
             a.takeDamage(dmgA);
             b.takeDamage(dmgB);
+            if (a === this.player || b === this.player) this.hud.hitFlash();
             // 玩家造成的撞击伤害：敌船飘白字 + 亮血条
             for (const [s, d] of [
               [a, dmgA],

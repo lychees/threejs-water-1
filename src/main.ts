@@ -1271,6 +1271,7 @@ class App {
         audio: this.audio,
         shipStats,
         terrain,
+        onCannonFire: () => this.director.kick(0.12),
         enemyDensity: this.state.enemyDensity,
         isRaining: () =>
           this.weather.getKind() === 'rain' && this.weather.getIntensity() > 0.05,

@@ -44,6 +44,7 @@ export class GameHud {
   private readonly elevationEl: HTMLElement;
   private readonly overEl: HTMLElement;
   private readonly overKills: HTMLElement;
+  private readonly hitFlashEl: HTMLElement;
   private readonly ehpPool: { el: HTMLElement; fill: HTMLElement; name: HTMLElement }[] = [];
   private readonly ehpVec = new THREE.Vector3();
 
@@ -65,9 +66,9 @@ export class GameHud {
       return fill;
     };
     status.append(hpBar, this.sailState);
-    this.reloadL = mkReload('左舷 Q');
-    this.reloadR = mkReload('右舷 E');
-    this.reloadB = mkReload('艏炮 ␣');
+    this.reloadL = mkReload('◀ 左舷 Q');
+    this.reloadR = mkReload('右舷 E ▶');
+    this.reloadB = mkReload('▲ 艏炮 ␣');
     // 射角显示（蓄力期间滚轮调节）
     this.elevationEl = el('div', 'ghud__elevation', '');
     status.append(this.elevationEl);
@@ -106,6 +107,9 @@ export class GameHud {
 
     this.rootEl = el('div', 'ghud-root');
     this.rootEl.append(status, score, this.overEl);
+    // 受击红晕：常驻全屏 overlay，命中时重触发 CSS 动画
+    this.hitFlashEl = el('div', 'ghud__hitflash');
+    this.rootEl.append(this.hitFlashEl);
     root.append(this.rootEl);
 
     // ---- 敌船血条池（受玩家攻击后头顶显示 5s，每帧投影更新） ----
@@ -285,6 +289,14 @@ export class GameHud {
   showGameOver(kills: number, wave: number): void {
     this.overKills.textContent = `击沉 ${kills} 艘 · 撑到第 ${wave} 波`;
     this.overEl.classList.remove('is-hidden');
+  }
+
+  /** 玩家受击：屏幕边缘红晕一闪（重触发动画）。 */
+  hitFlash(): void {
+    this.hitFlashEl.classList.remove('is-active');
+    // 强制 reflow 让动画可重触发
+    void this.hitFlashEl.offsetWidth;
+    this.hitFlashEl.classList.add('is-active');
   }
 
   hideGameOver(): void {
