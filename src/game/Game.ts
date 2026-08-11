@@ -47,6 +47,7 @@ import type { Terrain } from './terrain/Terrain';
 import { Towns, type GroundSampler, type TownSite } from './Towns';
 import { ShoreBatteries, BatteryBody } from './ShoreBatteries';
 import { WindCurrent } from './WindCurrent';
+import { Scenery } from './Scenery';
 
 /** 基座 glTF 船模归一化后的船长（米），缩放真实模型船型时以此为基准。 */
 const BASE_MODEL_LENGTH = 27;
@@ -111,6 +112,8 @@ export class Game {
   private towns: Towns | null = null;
   /** 岸防炮：模型异步加载完成前为 null。 */
   private batteries: ShoreBatteries | null = null;
+  /** 大航海景观层（港口/礁石/沉船；异步加载完成前为 null）。 */
+  scenery: Scenery | null = null; // public：调试/测试钩子读放置计数
   /** 地面高度采样（自定义：terrain.heightWorld；默认：seafloorHeight）。 */
   private ground: GroundSampler = { height: seafloorHeight };
   private readonly camera: THREE.PerspectiveCamera;
@@ -275,6 +278,28 @@ export class Game {
       this.terrain ? 4 : 2,
     ).then((b) => {
       this.batteries = b;
+    });
+
+    // ---- 大航海景观层：港口真房子/码头/灯笼/棕榈 + 海岸悬崖礁石 + 水面孤礁
+    // + 沉船残骸。模型异步加载，任一失败静默跳过（景观不是关键路径） ----
+    void Scenery.deploy(options.scene, options.assets, {
+      ground: this.ground,
+      coast: {
+        x: coastCenter.x,
+        z: coastCenter.z,
+        radius: this.terrain ? Math.min(this.terrain.sizeX, this.terrain.sizeZ) * 0.45 : ISLAND.radius * 1.2,
+      },
+      play: this.terrain
+        ? {
+            x: this.terrain.center.x,
+            z: this.terrain.center.z,
+            radius: Math.min(this.terrain.sizeX, this.terrain.sizeZ) * 0.45,
+          }
+        : { x: 0, z: 0, radius: 700 }, // 默认战场：原点活动圈
+      towns: this.towns.sites,
+      spawn: { x: this.player.position.x, z: this.player.position.z },
+    }).then((s) => {
+      this.scenery = s;
     });
 
     this.fanL = makeFanViz(options.scene);

@@ -271,6 +271,30 @@ Some slugs floated during planning do not exist on Poly Haven. Verified against
 | `satara_night_no_lamps` | yes | — | Moonlit preset. |
 | `qwantani_puresky` | yes | `kloofendal_misty_morning_puresky` | `qwantani_puresky` exists and is fine, but the demo needed a foggy/overcast sky rather than a fourth clear one. |
 
+### Quaternius Pirate Kit (`public/models/harbor/`, `public/models/game-ships/quaternius_pirate/`)
+
+[Quaternius Pirate Kit](https://quaternius.com/packs/pirate.html)（CC0 1.0，
+作者 Quaternius）。通过 Google Drive 发布页的文件夹 id 直链下载
+（`embeddedfolderview` 列清单 + `uc?export=download&id=` 取文件），全部
+glTF 已逐个 grep 确认为自嵌入（无外部 uri 引用；`game-ships/quaternius_pirate/`
+的两艘船例外，引用同目录共享贴图 `Atlas_Pirate.png`）。用于海战玩法的
+港口/海岸景观层（`src/game/Scenery.ts`）：House1-3、Sawmill、Dock、
+Dock_Broken、Dock_Pole、PalmTree_1-3、Cliff1-4、Rock_1/3/5、Anchor、
+Ship_Large、Ship_Small（亦作沉船残骸，压暗染色 + 半沉倾斜）。
+上文"surveyed and not used"表中 Quaternius 一行所述的不可复现下载问题，
+已由文件夹 id 直链解决，该行留作历史记录。
+
+| Asset | File path | Source | Author | Licence | Modifications |
+| --- | --- | --- | --- | --- | --- |
+| Pirate Kit environment/props/ship glTF（上列 18+3 件） | `public/models/harbor/*.gltf`、`public/models/game-ships/quaternius_pirate/*.gltf` | https://quaternius.com/packs/pirate.html（Drive 文件夹 `1KjMzhVsDcyvYMWeVjZcRfuu8auBLpNi2`） | Quaternius | CC0 1.0 | 残骸使用时材质压暗（运行时代码，文件未改） |
+
+### Coast additions (`public/models/coast/`)
+
+| Asset | File path | Source URL | Author | Licence | Modifications |
+| --- | --- | --- | --- | --- | --- |
+| Coast Rocks 05 (`coast_rocks_05`, 1k) | `public/models/coast/coast_rocks_05/`（gltf+bin+3 textures） | https://polyhaven.com/a/coast_rocks_05 | Poly Haven | CC0 1.0 | None (as downloaded) |
+| Cannon 01 (`cannon_01`, 1k) | `public/models/coast/cannon_01/`（gltf+bin+3 textures） | https://polyhaven.com/a/cannon_01 | Poly Haven | CC0 1.0 | None (as downloaded) |
+
 ---
 
 ### Typefaces (`public/fonts/`)

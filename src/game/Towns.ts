@@ -101,7 +101,8 @@ export class Towns {
       const count = HOUSES_PER_TOWN_MIN + Math.floor(Math.random() * (HOUSES_PER_TOWN_MAX - HOUSES_PER_TOWN_MIN));
       for (let i = 0; i < count; i++) {
         const a = Math.random() * Math.PI * 2;
-        const r = 12 + Math.random() * 85;
+        // 外环带 38~100m：镇中心留给 Scenery 的真实房屋模型，程序化盒子当远景/郊区
+        const r = 38 + Math.random() * 62;
         const x = site.x + Math.cos(a) * r;
         const z = site.z + Math.sin(a) * r;
         const h = ground.height(x, z);
