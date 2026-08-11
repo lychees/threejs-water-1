@@ -52,6 +52,10 @@ export class GameHud {
   /** 部件芯片（hull 永远第一，其余按船型配置）；kinds 签名变了才重建。 */
   private partChips: { kind: PartKind | 'hull'; chip: HTMLElement; fill: HTMLElement; shown: string }[] = [];
   private partsKey = '';
+  private readonly envEl: HTMLElement;
+  private readonly rowingEl: HTMLElement;
+  private envShown = '';
+  private rowingShown = false;
 
   constructor(root: HTMLElement) {
     // ---- 左下：玩家状态 ----
@@ -89,6 +93,11 @@ export class GameHud {
     // ---- 部件状态条（🛡船体 + 按船型 3~4 个部件，迷你血条绿→黄→红→黑） ----
     this.partsRow = el('div', 'ghud__parts');
     status.append(this.partsRow);
+
+    // ---- 环境行（风/洋流）与划桨状态 ----
+    this.envEl = el('div', 'ghud__env', '');
+    this.rowingEl = el('div', 'ghud__rowing is-hidden', '🛶 划桨中');
+    status.append(this.envEl, this.rowingEl);
 
     // ---- 右上：战绩 ----
     const score = el('section', 'ghud ghud--score');
@@ -274,9 +283,28 @@ export class GameHud {
     }
   }
 
+  /** 环境行：风 ↗ 15 m/s · 流 ↘ 0.8 m/s（角度为 (cos,sin) 矢量方位，内部转罗盘箭头）。 */
+  setEnv(windDir: number, windSpeed: number, curAngle: number, curSpeed: number): void {
+    const arrow = (a: number): string => {
+      // (cos a, sin a) 世界矢量 → 罗盘方位（-Z 北）→ 八向箭头
+      const deg = (Math.atan2(Math.cos(a), -Math.sin(a)) * 180) / Math.PI;
+      return ['↑', '↗', '→', '↘', '↓', '↙', '←', '↖'][Math.round((deg + 360) / 45) % 8];
+    };
+    const text = `风 ${arrow(windDir)} ${windSpeed.toFixed(0)} m/s · 流 ${arrow(curAngle)} ${curSpeed.toFixed(1)} m/s`;
+    if (text === this.envShown) return;
+    this.envShown = text;
+    this.envEl.textContent = text;
+  }
+
+  /** 划桨状态指示。 */
+  setRowing(on: boolean): void {
+    if (on === this.rowingShown) return;
+    this.rowingShown = on;
+    this.rowingEl.classList.toggle('is-hidden', !on);
+  }
+
   /** 屏幕下方中央的提示飘字（天气切换、拾取等）。 */
-  floatText(msg: string): void {
-    const node = el('div', 'ghud__float', msg);
+  floatText(msg: string): void {    const node = el('div', 'ghud__float', msg);
     node.style.marginLeft = `${Math.round((Math.random() - 0.5) * 120)}px`; // 避免连续飘字叠在一起
     this.rootEl.append(node);
     setTimeout(() => node.remove(), 1500);

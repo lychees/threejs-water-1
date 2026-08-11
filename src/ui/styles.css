@@ -1782,6 +1782,29 @@ body {
   background: hsl(120, 75%, 42%);
 }
 
+/* 环境行（风/洋流）与划桨状态 */
+.ghud__env {
+  margin-top: 5px;
+  font-size: 12px;
+  color: rgba(214, 226, 235, 0.82);
+  letter-spacing: 0.3px;
+}
+
+.ghud__rowing {
+  margin-top: 4px;
+  display: inline-block;
+  font-size: 12px;
+  color: #a8e6c8;
+  background: rgba(20, 60, 40, 0.5);
+  border: 1px solid rgba(120, 220, 170, 0.4);
+  border-radius: 3px;
+  padding: 1px 7px;
+}
+
+.ghud__rowing.is-hidden {
+  display: none;
+}
+
 /* --------------------------------------------------------------------------
    Minimap / touch fire / 定制行（阶段 B3）
    -------------------------------------------------------------------------- */

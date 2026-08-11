@@ -98,6 +98,8 @@ export class EnemyFleet {
   wave = 1;
   killsThisWave = 0;
   weatherSpeedMul = 1; // 由 Game 每帧写入：雨天全船减速
+  /** 风对帆的倍率（Game 每帧可用的环境查询；敌船 AI 不抢风，只吃倍率）。 */
+  windMulFor: (heading: number) => number = () => 1;
   /** 同屏敌船基准数（Panel 滑杆，1~6）。 */
   densityCap = 2;
   /** 自定义海域的活动范围（Game 注入）；null = 默认圆形世界。 */
@@ -254,7 +256,7 @@ export class EnemyFleet {
           break;
       }
       e.turnToward(desired, dt);
-      e.speed += (speedTarget * e.speedMul * this.weatherSpeedMul - e.speed) * Math.min(1, dt * 1.5);
+      e.speed += (speedTarget * e.speedMul * this.weatherSpeedMul * this.windMulFor(e.heading) - e.speed) * Math.min(1, dt * 1.5);
 
       // ---- 开火：舷侧大致对准玩家且进入射程（merchant 不开火） ----
       if (spec.fireCount === 0) continue;

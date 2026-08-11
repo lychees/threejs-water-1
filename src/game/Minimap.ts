@@ -52,6 +52,7 @@ export class Minimap {
     enemies: readonly GameShip[],
     supplies: Supplies | null,
     batteries: ShoreBatteries | null = null,
+    current: { x: number; z: number; speed: number } | null = null,
   ): void {
     const ctx = this.ctx;
     const W = this.canvas.width;
@@ -154,6 +155,34 @@ export class Minimap {
     ctx.closePath();
     ctx.fill();
     ctx.restore();
+
+    // 洋流箭头：左下角固定图标，方向为世界矢量（屏幕 +x 右 / +z 下）
+    if (current) {
+      const ix = 56;
+      const iy = W - 56;
+      const ang = Math.atan2(current.z, current.x);
+      const len = 16;
+      ctx.save();
+      ctx.translate(ix, iy);
+      ctx.rotate(ang);
+      ctx.strokeStyle = '#4a90d9';
+      ctx.fillStyle = '#4a90d9';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-len, 0);
+      ctx.lineTo(len, 0);
+      ctx.moveTo(len - 6, -4);
+      ctx.lineTo(len, 0);
+      ctx.lineTo(len - 6, 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.rotate(-ang);
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(`${current.speed.toFixed(1)}m/s`, 0, 22);
+      ctx.restore();
+    }
 
     // 指北针（固定世界北 = -Z = 屏幕上方，与相机无关）
     ctx.fillStyle = '#e8a33d';

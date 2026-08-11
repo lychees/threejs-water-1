@@ -12,7 +12,7 @@ export interface CompassMark {
   /** 绝对方位角（弧度，atan2(dx, -dz) 约定）。 */
   bearing: number;
   color: string;
-  kind: 'tri' | 'dot' | 'sq';
+  kind: 'tri' | 'dot' | 'sq' | 'wind' | 'current';
 }
 
 /** 可视半宽（度数）：中央 ±70°。 */
@@ -114,6 +114,28 @@ export class Compass {
         ctx.beginPath();
         ctx.arc(x, y + 4, 3, 0, Math.PI * 2);
         ctx.fill();
+      } else if (m.kind === 'wind') {
+        // 风羽：竖杆 + 顶部斜撇（吹向该方位）
+        ctx.strokeStyle = m.color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x, y + 8);
+        ctx.lineTo(x, y - 3);
+        ctx.moveTo(x, y - 3);
+        ctx.lineTo(x + 4, y - 1);
+        ctx.moveTo(x, y - 1);
+        ctx.lineTo(x + 3, y + 1);
+        ctx.stroke();
+      } else if (m.kind === 'current') {
+        // 洋流：空心箭头
+        ctx.strokeStyle = m.color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x, y - 1);
+        ctx.lineTo(x - 4, y + 6);
+        ctx.lineTo(x + 4, y + 6);
+        ctx.closePath();
+        ctx.stroke();
       } else {
         ctx.fillRect(x - 3, y + 1, 6, 6);
       }

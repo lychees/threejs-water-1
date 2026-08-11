@@ -1275,8 +1275,18 @@ class App {
         enemyDensity: this.state.enemyDensity,
         isRaining: () =>
           this.weather.getKind() === 'rain' && this.weather.getIntensity() > 0.05,
-        isSnowing: () =>
-          this.weather.getKind() === 'snow' && this.weather.getIntensity() > 0.05,
+        getWeather: () => {
+          const kind = this.weather.getKind();
+          const i = this.weather.getIntensity();
+          return {
+            raining: kind === 'rain' && i > 0.05,
+            intensity: kind === 'rain' ? i : 0,
+            snowing: kind === 'snow' && i > 0.05,
+            storm: this.state.preset === 'storm' || (kind === 'rain' && i > 0.8),
+          };
+        },
+        windSpeed: () => this.state.windSpeed,
+        windDirection: () => getPreset(this.state.preset).sea.windDirection,
         heightAt: (x, z) => this.sampler.height(x, z),
       });
 

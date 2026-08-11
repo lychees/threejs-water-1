@@ -46,6 +46,7 @@ import { ISLAND, seafloorHeight } from '../scene/Seafloor';
 import type { Terrain } from './terrain/Terrain';
 import { Towns, type GroundSampler, type TownSite } from './Towns';
 import { ShoreBatteries, BatteryBody } from './ShoreBatteries';
+import { WindCurrent } from './WindCurrent';
 
 /** 基座 glTF 船模归一化后的船长（米），缩放真实模型船型时以此为基准。 */
 const BASE_MODEL_LENGTH = 27;
@@ -81,10 +82,14 @@ export interface GameOptions {
   enemyDensity: number;
   /** 自定义海域地形（null = 默认迷雾岛海域）。 */
   terrain: Terrain | null;
-  /** 基座天气：大雨（rain 且有一定强度）时灭火、不新附着火、全船减速。 */
+  /** 基座天气：大雨（rain 且有一定强度）时灭火、不新附着火。 */
   isRaining: () => boolean;
-  /** 下雪（arctic）：轻度减速，不灭火。 */
-  isSnowing: () => boolean;
+  /** 基座天气详情（减速分级用）：雨强 0~1、雪、storm = storm preset 或雨强 >0.8。 */
+  getWeather: () => { raining: boolean; intensity: number; snowing: boolean; storm: boolean };
+  /** 基座风速 m/s（Panel 滑杆 / preset）——风速唯一来源，不另搞一套。 */
+  windSpeed: () => number;
+  /** preset 风向（下风方位角；漂移偏移由 WindCurrent 叠加）。 */
+  windDirection: () => number;
   heightAt: WaveHeightAt;
 }
 
@@ -111,7 +116,12 @@ export class Game {
   private readonly camera: THREE.PerspectiveCamera;
   private readonly heightAt: WaveHeightAt;
   private readonly isRaining: () => boolean;
-  private readonly isSnowing: () => boolean;
+  private readonly getWeather: () => { raining: boolean; intensity: number; snowing: boolean; storm: boolean };
+  /** 风与洋流环境（风速/基风向来自基座回调）。 */
+  readonly env: WindCurrent;
+  /** 划桨状态（桨帆船专属，X 切换）。 */
+  private rowing = false;
+  private readonly rowingAvailable: boolean;
   private readonly terrain: Terrain | null;
   private readonly abort = new AbortController();
 
@@ -174,7 +184,8 @@ export class Game {
     this.heightAt = options.heightAt;
     this.audio = options.audio;
     this.isRaining = options.isRaining;
-    this.isSnowing = options.isSnowing;
+    this.getWeather = options.getWeather;
+    this.env = new WindCurrent(options.windDirection, options.windSpeed);
     this.playerBase = options.player;
 
     // 游戏接管主船：基座的力模型控制器保持停用，浮力由 GameShip 自己采样。
@@ -184,6 +195,7 @@ export class Game {
     // ---- 所选船型：属性（ships.json 映射） + 外观（含精致模型/染色/船首像） ----
     const def = getShipDef(resolveShipId());
     const stats = options.shipStats[def.id];
+    this.rowingAvailable = (def.spec.oars ?? 0) > 0; // 桨帆船型获得 X 划桨技能
     const hullHp = Math.round(stats.hp * hullMulFor(def.id)); // 铁甲船等船体倍率
     this.player = new GameShip(options.player.object, {
       maxHp: hullHp,
@@ -201,6 +213,7 @@ export class Game {
     this.combat.setCamera(options.camera); // 火焰广告牌的柱状朝向用
     this.fleet = new EnemyFleet(options.scene, this.combat);
     this.fleet.densityCap = options.enemyDensity;
+    this.fleet.windMulFor = (h) => this.env.windMulFor(h); // 敌船同样吃风
     this.hud = new GameHud(options.uiRoot);
     this.minimap = new Minimap(options.uiRoot);
     this.compass = new Compass(options.uiRoot);
@@ -419,6 +432,7 @@ export class Game {
     this.fleet.reset();
     this.batteries?.reset();
     this.player.revive();
+    this.rowing = false;
     if (this.terrain) this.player.position.copy(this.terrain.findSpawn());
     this.kills = 0;
     this.loot = 0;
@@ -437,10 +451,18 @@ export class Game {
   update(dt: number): void {
     this.time += dt;
     const player = this.player;
+    this.env.update(dt); // 风向漂移 + 洋流漂移
     // 大雨：灭火 + 不新附着火（onHit 的 skipFire）+ 全船减速
     const raining = this.isRaining();
-    // 雨天大减速、雪天小减速
-    const weatherSpeedMul = raining ? 0.9 : this.isSnowing() ? 0.95 : 1;
+    // 暴风雨全船减速分级：小雨 ×0.95 / 中雨 ×0.88 / 大雨 ×0.8 / 暴风雨 ×0.7；雪 ×0.95
+    const w = this.getWeather();
+    const weatherSpeedMul = w.storm
+      ? 0.7
+      : w.raining
+        ? w.intensity > 0.66 ? 0.8 : w.intensity > 0.33 ? 0.88 : 0.95
+        : w.snowing
+          ? 0.95
+          : 1;
     this.fleet.weatherSpeedMul = weatherSpeedMul;
 
     // 任意死因（炮火/撞击/着火）都进 Game Over
@@ -475,7 +497,20 @@ export class Game {
         );
       }
 
-      const targetSpeed = this.sailAmount * player.maxSpeed * player.speedMul * weatherSpeedMul;
+      // 划桨中船桨被毁 → 强制停桨
+      if (this.rowing && player.partDestroyed('oars')) {
+        this.rowing = false;
+        this.hud.floatText('船桨被摧毁，无法继续划桨！');
+      }
+      const windMul = this.env.windMulFor(player.heading); // 顺风 ×1.12 / 顶风 ×0.78
+      const sailTarget = this.sailAmount * player.maxSpeed * player.speedMul * windMul * weatherSpeedMul;
+      let targetSpeed = sailTarget;
+      if (this.rowing) {
+        // 划桨：固定 0.5×maxSpeed 推进，无视风向/风雨/破帆与帆装毁损；
+        // 漏水（船体损伤）仍拖慢。与帆速取较大者。
+        const leakMul = player.debuff.leak > 0 ? DEBUFF_DEFS.leak.speedMul : 1;
+        targetSpeed = Math.max(sailTarget, 0.5 * player.maxSpeed * leakMul);
+      }
       player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
       let turn = 0;
       if (this.keys.has('KeyA')) turn += 1; // A = 左转
@@ -549,6 +584,22 @@ export class Game {
       for (const e of this.fleet.enemies) this.keepInDeepWater(e);
     }
     this.resolveShipCollisions();
+    // ---- 洋流：所有船 + 漂浮补给每帧叠加 current×dt（停船也会被推着走） ----
+    const curDx = this.env.currentX * dt;
+    const curDz = this.env.currentZ * dt;
+    player.position.x += curDx;
+    player.position.z += curDz;
+    for (const e of this.fleet.enemies) {
+      e.position.x += curDx;
+      e.position.z += curDz;
+    }
+    if (this.supplies) {
+      for (const item of this.supplies.items) {
+        if (!item.active) continue;
+        item.object.position.x += curDx;
+        item.object.position.z += curDz;
+      }
+    }
     // 岸防炮：150m 内对玩家开火（带提前量的抛物线弹）
     this.batteries?.update(dt, player);
 
@@ -670,8 +721,15 @@ export class Game {
       this.chargeL !== null || this.chargeR !== null || this.chargeBow !== null,
     );
     this.hud.updateEnemyHpBars(dt, this.fleet.enemies, this.camera);
+    // 环境行（风/洋流）与划桨状态：文本有缓存，每帧调无重排
+    this.hud.setEnv(this.env.windDirection, this.env.windSpeed, this.env.currentAngle, this.env.currentSpeedVal);
+    this.hud.setRowing(this.rowing);
     if ((this.mmFrame & 3) === 0) {
-      this.minimap.draw(player, this.fleet.enemies, this.supplies, this.batteries); // 小地图 ~15fps 节流
+      this.minimap.draw(player, this.fleet.enemies, this.supplies, this.batteries, {
+        x: this.env.currentX,
+        z: this.env.currentZ,
+        speed: this.env.currentSpeedVal,
+      }); // 小地图 ~15fps 节流
     }
     // 罗盘隔帧（刻度 + 方位标记）
     if ((this.mmFrame & 1) === 0) this.drawCompass();
@@ -698,6 +756,10 @@ export class Game {
     for (const e of this.fleet.enemies) {
       if (!e.sinking) push(bearing(e.position.x, e.position.z), e.mapColor, 'tri');
     }
+    // 风羽（下风方向，青色）与洋流箭头（蓝色）：绝对方位标记
+    const dirBearing = (dx: number, dz: number): number => Math.atan2(dx, -dz);
+    push(dirBearing(Math.cos(this.env.windDirection), Math.sin(this.env.windDirection)), '#7fd4ff', 'wind');
+    push(dirBearing(this.env.currentX, this.env.currentZ), '#4a90d9', 'current');
     if (this.supplies) {
       for (const item of this.supplies.items) {
         if (!item.active) continue;
@@ -786,6 +848,7 @@ export class Game {
     // 帆位连续化：W/S 在主循环里按按住时长处理，此处不响应离散按键
     if (e.code === 'KeyQ') this.startCharge('L');
     if (e.code === 'KeyE') this.startCharge('R');
+    if (e.code === 'KeyX') this.toggleRowing();
     if (e.code === 'Space') {
       e.preventDefault();
       this.startCharge('bow');
@@ -819,6 +882,20 @@ export class Game {
   private readonly onContextMenu = (e: MouseEvent): void => {
     e.preventDefault();
   };
+
+  /** X 键：桨帆船切换划桨（固定 0.5×maxSpeed 推进，无视风/雨/帆损）。 */
+  private toggleRowing(): void {
+    if (!this.rowingAvailable) {
+      this.hud.floatText('本船无桨');
+      return;
+    }
+    if (!this.rowing && this.player.partDestroyed('oars')) {
+      this.hud.floatText('船桨已毁，无法划桨');
+      return;
+    }
+    this.rowing = !this.rowing;
+    this.hud.floatText(this.rowing ? '🛶 开始划桨' : '停止划桨');
+  }
 
   /** 当前射角的上抛初速（vy）。 */
   get elevationVy(): number {
