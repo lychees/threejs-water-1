@@ -91,6 +91,13 @@ export class GameShip {
   hitRadius: number;
 
   heading = 0; // 旧版约定：forward = (sin, 0, cos)
+  /**
+   * 航迹角（实际速度方向）：以 leeway 时间常数追上 heading——转向时船身
+   * 带着侧滑，船体朝向与实际航迹有夹角；大船（lengthScale 大）漂移更明显。
+   */
+  course = 0;
+  /** 划桨直接驱动：响应快、几乎无侧滑（Game 每帧按 rowing 状态写入）。 */
+  directDrive = false;
   speed = 0;
   pitch = 0; // 浮力俯仰（平滑后），负 = 抬艏
   roll = 0; // 浮力横摇（平滑后），正 = 桅杆倒向右舷
@@ -264,6 +271,7 @@ export class GameShip {
     this.restoreMastVisual();
     this.position.set(0, 0, 0);
     this.heading = 0;
+    this.course = 0;
     this.applyPose();
   }
 
@@ -331,14 +339,23 @@ export class GameShip {
     this.pitch += (targetPitch - this.pitch) * k;
     this.roll += (targetRoll - this.roll) * k;
 
+    // ---- 航迹滞后（下风飘移 leeway）：速度方向以 τ 时间常数追上船头。
+    // 小船 τ≈2.0s、大船 τ≈3.0s（lengthScale 越大侧滑越明显）；
+    // 划桨直接驱动 τ=0.3s（桨船优势：启停快、几乎不侧滑） ----
+    const tau = this.directDrive ? 0.3 : 1.3 + 1.1 * this.lengthScale;
+    let courseDiff = this.heading - this.course;
+    while (courseDiff > Math.PI) courseDiff -= Math.PI * 2;
+    while (courseDiff < -Math.PI) courseDiff += Math.PI * 2;
+    this.course += courseDiff * Math.min(1, dt / tau);
+
     this.applyMotion(dt);
   }
 
-  /** 位移 + 姿态应用（普通与沉船状态共用）。 */
+  /** 位移（沿航迹角 course，不是船头 heading——侧滑来自两者夹角）+ 姿态应用。 */
   private applyMotion(dt: number): void {
     const p = this.object.position;
-    p.x += Math.sin(this.heading) * this.speed * dt;
-    p.z += Math.cos(this.heading) * this.speed * dt;
+    p.x += Math.sin(this.course) * this.speed * dt;
+    p.z += Math.cos(this.course) * this.speed * dt;
 
     // 限制活动范围
     const rx = p.x - this.limitCX;

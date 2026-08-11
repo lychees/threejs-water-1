@@ -201,11 +201,12 @@ export class ShoreBatteries {
         continue;
       }
       b.cooldown = RELOAD_MIN + Math.random() * RELOAD_SPAN;
-      // 提前量：玩家速度方向线性预判 ×0.7
+      // 提前量：按实际航迹角（course，含侧滑）线性预判 ×0.7
       const tof = dist / SHOT_SPEED;
-      const fwd = player.forward;
-      const aimX = player.position.x + fwd.x * player.speed * tof * LEAD_FACTOR;
-      const aimZ = player.position.z + fwd.z * player.speed * tof * LEAD_FACTOR;
+      const cvx = Math.sin(player.course) * player.speed;
+      const cvz = Math.cos(player.course) * player.speed;
+      const aimX = player.position.x + cvx * tof * LEAD_FACTOR;
+      const aimZ = player.position.z + cvz * tof * LEAD_FACTOR;
       this.combat.fireBatteryShot(b.body.position, aimX, aimZ, tof, SPREAD);
     }
   }

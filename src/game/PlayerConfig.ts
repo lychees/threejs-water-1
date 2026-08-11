@@ -13,8 +13,8 @@ export const FEEL = {
   ASTERN_HOLD: 0.4, // 帆量降到 0 后 S 继续按住进入倒车的延迟
   CHARGE_TIME: 1.2, // 火炮蓄力满所需秒数
   BOW_RELOAD: 1.6, // 艏炮独立冷却
-  BOW_SPEED: 52, // 艏炮初速（比舷炮略高，弹道平直）
-  BROADSIDE_SPEED: 46, // 舷炮初速基准（满蓄力 ×1.5 = 69）
+  BOW_SPEED: 62, // 艏炮初速（比舷炮略高，弹道平直）
+  BROADSIDE_SPEED: 56, // 舷炮初速基准（满蓄力 ×1.5 = 84）
   RELOAD_TIME: 2.4, // 舷炮装填
   PRIME_TIME: 1.2, // 装填满后再等 1.2s（半格）进入满装填
   PRIME_SPEED_MUL: 1.2, // 满装填：初速/射程加成

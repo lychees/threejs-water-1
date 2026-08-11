@@ -100,6 +100,8 @@ export class EnemyFleet {
   weatherSpeedMul = 1; // 由 Game 每帧写入：雨天全船减速
   /** 风对帆的倍率（Game 每帧可用的环境查询；敌船 AI 不抢风，只吃倍率）。 */
   windMulFor: (heading: number) => number = () => 1;
+  /** 可航水域校验（Game 注入：地面高度 < -3m）；null = 不校验（兼容旧行为）。 */
+  isNavigable: ((x: number, z: number) => boolean) | null = null;
   /** 同屏敌船基准数（Panel 滑杆，1~6）。 */
   densityCap = 2;
   /** 自定义海域的活动范围（Game 注入）；null = 默认圆形世界。 */
@@ -140,6 +142,35 @@ export class EnemyFleet {
 
     const angle = Math.random() * Math.PI * 2;
     const dist = 150 + Math.random() * 90;
+    // 出生点水域校验：重抽至多 20 次；仍不中则环形扫描找最近可航点
+    let sx = playerPos.x + Math.cos(angle) * dist;
+    let sz = playerPos.z + Math.sin(angle) * dist;
+    if (this.isNavigable) {
+      const nav = this.isNavigable;
+      let found = nav(sx, sz);
+      for (let i = 0; i < 19 && !found; i++) {
+        const a2 = Math.random() * Math.PI * 2;
+        const d2 = 150 + Math.random() * 90;
+        sx = playerPos.x + Math.cos(a2) * d2;
+        sz = playerPos.z + Math.sin(a2) * d2;
+        found = nav(sx, sz);
+      }
+      if (!found) {
+        // 兜底：渐扩环扫（自定义海域玩家贴岸时 150~240m 环带可能全是陆地）
+        for (let r = 160; r <= 480 && !found; r += 40) {
+          for (let i = 0; i < 16 && !found; i++) {
+            const a3 = (i / 16) * Math.PI * 2;
+            const tx = playerPos.x + Math.cos(a3) * r;
+            const tz = playerPos.z + Math.sin(a3) * r;
+            if (nav(tx, tz)) {
+              sx = tx;
+              sz = tz;
+              found = true;
+            }
+          }
+        }
+      }
+    }
     const hullHp = Math.round((50 + this.wave * 15) * 2.5 * spec.hpMul * hullMulFor(defId)); // 基底 ×2.5：拉长战斗，让 debuff 有时间发酵
     const vis = wrapEnemyVisual(defId);
     const ship = new GameShip(vis.group, {
@@ -155,11 +186,7 @@ export class EnemyFleet {
     ship.mapColor = spec.mapColor;
     // 程序化船体的吃水：比旧版略抬，防大浪穿模透过甲板
     ship.baseY = 0.55 * lengthScale;
-    ship.position.set(
-      playerPos.x + Math.cos(angle) * dist,
-      0,
-      playerPos.z + Math.sin(angle) * dist,
-    );
+    ship.position.set(sx, 0, sz);
     ship.heading = angle + Math.PI; // 大致朝玩家
     ship.orbitDir = Math.random() < 0.5 ? 1 : -1;
     ship.cooldown = 2 + Math.random() * 3;
@@ -256,7 +283,10 @@ export class EnemyFleet {
           break;
       }
       e.turnToward(desired, dt);
-      e.speed += (speedTarget * e.speedMul * this.weatherSpeedMul * this.windMulFor(e.heading) - e.speed) * Math.min(1, dt * 1.5);
+      // 与玩家同一惯性模型：加速 τ≈4s、减速 τ≈6s（敌船不划桨）
+      const eTarget = speedTarget * e.speedMul * this.weatherSpeedMul * this.windMulFor(e.heading);
+      const eRate = eTarget > e.speed ? 1 / 4 : 1 / 6;
+      e.speed += (eTarget - e.speed) * Math.min(1, dt * eRate);
 
       // ---- 开火：舷侧大致对准玩家且进入射程（merchant 不开火） ----
       if (spec.fireCount === 0) continue;

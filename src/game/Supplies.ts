@@ -86,12 +86,12 @@ export class Supplies {
   }
 
   private place(item: Supply, around: THREE.Vector3, initial = false): void {
-    for (let attempt = 0; attempt < 8; attempt++) {
+    for (let attempt = 0; attempt < 20; attempt++) {
       const angle = Math.random() * Math.PI * 2;
       const dist = SPAWN_MIN + Math.random() * (SPAWN_MAX - SPAWN_MIN);
       const x = around.x + Math.cos(angle) * dist;
       const z = around.z + Math.sin(angle) * dist;
-      if (this.isWater && !this.isWater(x, z)) continue; // 自定义海域：只撒在水里
+      if (this.isWater && !this.isWater(x, z)) continue; // 只放在可航水域
       item.object.position.set(x, 0, z);
       item.object.rotation.y = Math.random() * Math.PI * 2;
       item.active = true;
@@ -100,7 +100,25 @@ export class Supplies {
       if (!initial) item.phase = Math.random() * Math.PI * 2;
       return;
     }
-    // 8 次都落在岸上：贴着玩家附近总能找到水——放远点就行，下次重刷再随机
+    // 兜底：渐扩环扫找可航点（自定义海域玩家贴岸时随机环带可能全是陆地）
+    if (this.isWater) {
+      for (let r = SPAWN_MIN; r <= SPAWN_MAX + 200; r += 40) {
+        for (let i = 0; i < 16; i++) {
+          const a = (i / 16) * Math.PI * 2;
+          const x = around.x + Math.cos(a) * r;
+          const z = around.z + Math.sin(a) * r;
+          if (!this.isWater(x, z)) continue;
+          item.object.position.set(x, 0, z);
+          item.object.rotation.y = Math.random() * Math.PI * 2;
+          item.active = true;
+          item.respawnIn = 0;
+          item.object.visible = true;
+          if (!initial) item.phase = Math.random() * Math.PI * 2;
+          return;
+        }
+      }
+    }
+    // 全陆极端兜底（默认海域不会到这）：贴着玩家附近放，下次重刷再随机
     item.object.position.set(around.x + SPAWN_MIN, 0, around.z);
     item.active = true;
     item.respawnIn = 0;

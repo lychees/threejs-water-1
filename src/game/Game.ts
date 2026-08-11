@@ -23,7 +23,7 @@ import { GameShip, DEBUFF_DEFS, PART_INFO, type PartKind, type ShipPart, type Wa
 import { Combat, type HitTarget, type Cannonball } from './Combat';
 import { EnemyFleet } from './EnemyFleet';
 import { GameHud, ENEMY_HP_BAR_TIME, dmgFontSize } from './GameHud';
-import { makeFanViz, updateFanViz } from './FanViz';
+import { makeFanViz, updateFanViz, makeArcViz, updateArcViz, type ArcViz } from './FanViz';
 import { Supplies } from './Supplies';
 import {
   buildShip,
@@ -128,6 +128,9 @@ export class Game {
   private readonly fanL: THREE.Mesh;
   private readonly fanR: THREE.Mesh;
   private readonly fanBow: THREE.Mesh;
+  private readonly arcL: ArcViz;
+  private readonly arcR: ArcViz;
+  private readonly arcBow: ArcViz;
 
   /** 玩家帆面外观回调（程序化/精致模型的鼓收帆；基座 glTF 时为 null）。 */
   private playerSail: ((amount: number) => void) | null = null;
@@ -277,14 +280,20 @@ export class Game {
     this.fanL = makeFanViz(options.scene);
     this.fanR = makeFanViz(options.scene);
     this.fanBow = makeFanViz(options.scene);
+    this.arcL = makeArcViz(options.scene);
+    this.arcR = makeArcViz(options.scene);
+    this.arcBow = makeArcViz(options.scene);
 
-    // 漂浮补给：模型异步到，到了才开始撒布；自定义海域只撒在水里
+    // 漂浮补给：模型异步到，到了才开始撒布；敌船与补给统一过可航水域校验
+    // （地面高度 < -3m 才算可航；自定义海域用地形高度场，默认岛用基座 seafloor）
+    const isNavigable = (x: number, z: number): boolean => this.ground.height(x, z) < -3;
+    this.fleet.isNavigable = isNavigable;
     void Supplies.load(
       options.scene,
       options.assets,
       this.heightAt,
       this.player,
-      this.terrain ? (x, z) => this.terrain!.heightWorld(x, z) < -2 : null,
+      isNavigable,
     ).then((s) => {
       this.supplies = s;
     });
@@ -511,7 +520,11 @@ export class Game {
         const leakMul = player.debuff.leak > 0 ? DEBUFF_DEFS.leak.speedMul : 1;
         targetSpeed = Math.max(sailTarget, 0.5 * player.maxSpeed * leakMul);
       }
-      player.speed += (targetSpeed - player.speed) * Math.min(1, dt * 1.2);
+      // 加减速分离（风帆战舰惯性）：升帆加速 τ≈4s、收帆/滑行 τ≈6s——
+      // 参数刻意保守：有沉重提速感但不致失控；划桨直接驱动 τ≈0.45s（快速启停）
+      player.directDrive = this.rowing;
+      const rate = this.rowing ? 2.2 : targetSpeed > player.speed ? 1 / 4 : 1 / 6;
+      player.speed += (targetSpeed - player.speed) * Math.min(1, dt * rate);
       let turn = 0;
       if (this.keys.has('KeyA')) turn += 1; // A = 左转
       if (this.keys.has('KeyD')) turn -= 1;
@@ -532,6 +545,9 @@ export class Game {
     updateFanViz(this.fanL, this.chargeL, -1, player, this.heightAt, this.elevationVy, this.azimuthL);
     updateFanViz(this.fanR, this.chargeR, 1, player, this.heightAt, this.elevationVy, this.azimuthR);
     updateFanViz(this.fanBow, this.chargeBow, 0, player, this.heightAt, this.elevationVy, this.azimuthBow);
+    updateArcViz(this.arcL, this.chargeL, -1, player, this.heightAt, this.elevationVy, this.azimuthL);
+    updateArcViz(this.arcR, this.chargeR, 1, player, this.heightAt, this.elevationVy, this.azimuthR);
+    updateArcViz(this.arcBow, this.chargeBow, 0, player, this.heightAt, this.elevationVy, this.azimuthBow);
 
     // ---- 冷却 ----
     this.cooldownL = Math.max(0, this.cooldownL - dt);
@@ -1163,11 +1179,11 @@ export class Game {
         const nx = dx / dist;
         const nz = dz / dist;
 
-        // 撞击前的相对速度（用于伤害结算）
-        const vax = Math.sin(a.heading) * a.speed;
-        const vaz = Math.cos(a.heading) * a.speed;
-        const vbx = Math.sin(b.heading) * b.speed;
-        const vbz = Math.cos(b.heading) * b.speed;
+        // 撞击前的相对速度（用于伤害结算）：按实际航迹角 course（含侧滑）
+        const vax = Math.sin(a.course) * a.speed;
+        const vaz = Math.cos(a.course) * a.speed;
+        const vbx = Math.sin(b.course) * b.speed;
+        const vbz = Math.cos(b.course) * b.speed;
         const relSpeed = Math.hypot(vbx - vax, vbz - vaz);
 
         // 位置分离（各推一半）
@@ -1176,9 +1192,9 @@ export class Game {
         b.position.x += (nx * pen) / 2;
         b.position.z += (nz * pen) / 2;
 
-        // 消掉沿法向的速度分量，切向保留
+        // 消掉沿法向的速度分量，切向保留（按航迹角计算法向投影）
         for (const s of [a, b]) {
-          const fDotN = Math.sin(s.heading) * nx + Math.cos(s.heading) * nz;
+          const fDotN = Math.sin(s.course) * nx + Math.cos(s.course) * nz;
           s.speed *= Math.max(0.2, 1 - fDotN * fDotN);
         }
 
