@@ -145,6 +145,12 @@ export class Fire {
   private readonly _pos = new THREE.Vector3();
   private readonly _s = new THREE.Vector3();
   private readonly _c = new THREE.Color();
+  private readonly _sv = new THREE.Vector3();
+  /** 帆面发射点复用槽（每船最多 2 个）。 */
+  private readonly _sailPts = [
+    { x: 0, y: 0, z: 0 },
+    { x: 0, y: 0, z: 0 },
+  ];
   private static readonly Z_AXIS = new THREE.Vector3(0, 0, 1);
 
   constructor(scene: THREE.Scene) {
@@ -222,6 +228,20 @@ export class Fire {
       const sinH = Math.sin(s.heading);
       const cosH = Math.cos(s.heading);
 
+      // 帆面爬火的发射点：帆 mesh 世界位置（随鼓缩/收放自动跟随），取中上部；
+      // 收帆（不可见/scaleY<0.2）时不在帆上烧
+      let sailPtCount = 0;
+      const boosted = s.partDestroyed('sails') || s.debuff.sail > 0; // 帆装毁损/破帆：火更旺
+      for (const mesh of s.sailMeshes) {
+        if (sailPtCount >= 2) break;
+        if (!mesh.visible || mesh.scale.y < 0.2) continue;
+        mesh.getWorldPosition(this._sv);
+        const pt = this._sailPts[sailPtCount++];
+        pt.x = this._sv.x;
+        pt.y = this._sv.y - 0.8 * ls; // 帆面中上部
+        pt.z = this._sv.z;
+      }
+
       // 发射率（每秒每点）：火苗 12 / 烟 4.5 / 火星 6，按预算与画质缩放
       fire.emitAcc += dt * rateScale;
       const step = 1 / (12 * this.n(1) || 1); // 以火苗率为基准节拍
@@ -282,6 +302,47 @@ export class Fire {
               p.r1 = 0.35; p.g1 = 0.04; p.b1 = 0;
               p.flicker = 30 + Math.random() * 20;
               p.phase = Math.random() * Math.PI * 2;
+            });
+          }
+        }
+        // ---- 帆面爬火：贴帆面中上部的火苗；帆布燃烧烟更浓更大；帆装毁损/破帆更旺 ----
+        for (let si = 0; si < sailPtCount; si++) {
+          const sp = this._sailPts[si];
+          const flameCount = boosted ? 2 : 1;
+          for (let f = 0; f < flameCount; f++) {
+            this.spawn(0, (p) => {
+              p.x = sp.x + (Math.random() - 0.5) * 0.8 * ls;
+              p.y = sp.y + (Math.random() - 0.5) * 0.5 * ls;
+              p.z = sp.z + (Math.random() - 0.5) * 0.5;
+              p.vx = (Math.random() - 0.5) * 0.4;
+              p.vy = 1.8 + Math.random() * 1.4;
+              p.vz = (Math.random() - 0.5) * 0.4;
+              p.grav = -1.5;
+              p.life = 0.45 + Math.random() * 0.25;
+              p.s0 = (0.6 + Math.random() * 0.5) * ls;
+              p.s1 = p.s0 * 0.3;
+              p.stretch = 1.5 + Math.random() * 0.5;
+              p.r0 = 1; p.g0 = 0.9; p.b0 = 0.7;
+              p.r1 = 0.4; p.g1 = 0.08; p.b1 = 0.01;
+              p.flicker = 26 + Math.random() * 14;
+              p.phase = Math.random() * Math.PI * 2;
+            });
+          }
+          if (Math.random() < 0.6 * this.particleScale) {
+            this.spawn(1, (p) => {
+              p.x = sp.x; p.y = sp.y + 0.5 * ls; p.z = sp.z;
+              p.vx = (Math.random() - 0.5) * 0.4;
+              p.vy = 1.6 + Math.random();
+              p.vz = (Math.random() - 0.5) * 0.4;
+              p.grav = -0.7;
+              p.life = 1.6 + Math.random() * 0.8;
+              p.s0 = 1.5 * ls;
+              p.s1 = 4.2 * ls; // 帆布烟比船体火更浓更大
+              p.stretch = 1;
+              const g = 0.13 + Math.random() * 0.04;
+              p.r0 = g; p.g0 = g; p.b0 = g;
+              p.r1 = 0; p.g1 = 0; p.b1 = 0;
+              p.spin = (Math.random() - 0.5) * 2.5;
             });
           }
         }

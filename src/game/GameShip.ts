@@ -63,6 +63,8 @@ export const SAILS_BROKEN_CAP = 0.4;
 export const OARS_BROKEN_SPEED_MUL = 0.5;
 /** 船舵毁损后的舵效倍率。 */
 export const RUDDER_BROKEN_TURN_MUL = 0.35;
+/** 帆面烧焦终点色（焦黑）。 */
+const SCORCH_COLOR = new THREE.Color(0x2b2018);
 
 export interface GameShipOptions {
   maxHp: number;
@@ -131,6 +133,14 @@ export class GameShip {
    * 由 Game/EnemyFleet 在外观生成后挂入。
    */
   mastVisual: THREE.Object3D | null = null;
+
+  /** 帆面网格（程序化 = userData.sail 的 mesh；精致模型 = /sail/i 命名节点）。
+   *  帆面爬火的发射点与烧焦渐变的材质克隆都挂在它上面。 */
+  sailMeshes: THREE.Mesh[] = [];
+  /** 帆面烧焦程度 0~1（着火时 ~6s 烧到焦黑；火灭褪到 0.3 淡痕保留）。 */
+  scorch = 0;
+  /** 首次烧焦时的帆材质克隆与原色备份（sailMat 缓存是共享的，燃烧船必须独立）。 */
+  private sailMatBackup: { mat: THREE.MeshStandardMaterial; base: THREE.Color }[] | null = null;
 
   /** 活动范围：默认原点周围 WORLD_LIMIT；自定义海域时由 Game 改为区域中心。 */
   limitCX = 0;
@@ -233,6 +243,35 @@ export class GameShip {
     return worst;
   }
 
+  /**
+   * 帆面烧焦驱动（Game 每帧调用）：着火期间 ~6s 烧到焦黑（白→黄褐→焦黑随
+   * scorch 插值自然经过）；火灭后 ~15s 褪到 0.3 淡痕并保留（选保留淡痕：
+   * 战损可读且不闪变）。首次烧焦时克隆帆材质（sailMat 按颜色全局共享，
+   * 直接改会污染所有同色的船）。
+   */
+  scorchSails(dt: number, burning: boolean): void {
+    if (this.sailMeshes.length === 0) return;
+    if (burning) this.scorch = Math.min(1, this.scorch + dt / 6);
+    else if (this.scorch > 0.3) this.scorch = Math.max(0.3, this.scorch - dt / 15);
+    if (this.scorch <= 0) return;
+    if (!this.sailMatBackup) {
+      this.sailMatBackup = [];
+      const seen = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+      for (const mesh of this.sailMeshes) {
+        const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        const orig = mats[0] as THREE.MeshStandardMaterial;
+        let clone = seen.get(orig);
+        if (!clone) {
+          clone = orig.clone() as THREE.MeshStandardMaterial;
+          seen.set(orig, clone);
+        }
+        this.sailMatBackup.push({ mat: clone, base: orig.color.clone() });
+        mesh.material = clone;
+      }
+    }
+    for (const b of this.sailMatBackup) b.mat.color.copy(b.base).lerp(SCORCH_COLOR, this.scorch);
+  }
+
   /** 桅杆视觉：倾倒（程序化船），精致模型无节点只做数值。 */
   private breakMastVisual(): void {
     if (!this.mastVisual) return;
@@ -296,6 +335,8 @@ export class GameShip {
     this.roll = 0;
     this.hurtT = 0;
     this.bowHitT = 0;
+    this.scorch = 0;
+    if (this.sailMatBackup) for (const b of this.sailMatBackup) b.mat.color.copy(b.base); // 焦痕复原
     this.shakeRoll = this.shakePitch = 0;
     this.shakeRollVel = this.shakePitchVel = 0;
     this.debuff.fire = this.debuff.leak = this.debuff.sail = 0;

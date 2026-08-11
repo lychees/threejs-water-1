@@ -417,6 +417,13 @@ export class Game {
         const inst = instantiateShip(template, hasTint ? tint : null);
         const targetLength = SHIP_MODELS[def.model!]?.targetLength ?? def.spec.length;
         mount(inst.group, inst.setSailAmount, targetLength / BASE_LENGTH, 0);
+        // 精致模型的帆节点（爬火/烧焦用）
+        const fancySails: THREE.Mesh[] = [];
+        inst.group.traverse((o) => {
+          const m = o as THREE.Mesh;
+          if (m.isMesh && /sail/i.test(m.name)) fancySails.push(m);
+        });
+        this.player.sailMeshes = fancySails;
       });
       return;
     }
@@ -440,6 +447,7 @@ export class Game {
       this.playerBase.setModelScale(def.spec.length / BASE_MODEL_LENGTH);
       const holder = new THREE.Group(); // 船首像的 +Z 挂载层
       mount(holder, null, def.spec.length / BASE_LENGTH, 0);
+      this.player.sailMeshes = []; // glTF 船面无爬火/烧焦（无可控帆节点）
       return;
     }
     this.playerBase.setModelVisible(false);
@@ -456,6 +464,12 @@ export class Game {
       0.55 * (def.spec.length / BASE_LENGTH),
     );
     this.player.mastVisual = visual.masts[0] ?? null; // 桅杆部件毁损时倾倒这根
+    // 帆面网格（爬火发射点 + 烧焦克隆用）
+    this.player.sailMeshes = [];
+    visual.group.traverse((o) => {
+      const sail = o.userData.sail as { mesh: THREE.Mesh } | undefined;
+      if (sail) this.player.sailMeshes.push(sail.mesh);
+    });
   }
 
   /** 出航：初始 60% 帆，两艘敌船。 */
@@ -727,6 +741,8 @@ export class Game {
         s.debuff.fire = 0;
         if (s === player) this.hud.floatText('大雨浇灭了火焰');
       }
+      // 帆面烧焦渐变（首次烧焦克隆帆材质；火灭褪到淡痕保留）
+      s.scorchSails(dt, s.debuff.fire > 0);
       if (s.debuff.leak > 0 && Math.random() < dt * 1.5) {
         const pos = this.scratch.copy(s.position);
         pos.x += (Math.random() - 0.5) * 3;

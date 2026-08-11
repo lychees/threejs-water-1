@@ -83,14 +83,19 @@ export interface FleetHooks {
 function wrapEnemyVisual(
   defId: number,
   sailColor = ENEMY_SAIL,
-): { group: THREE.Group; mast: THREE.Object3D | null } {
+): { group: THREE.Group; mast: THREE.Object3D | null; sails: THREE.Mesh[] } {
   const def = getShipDef(defId);
   const visual = buildShip(def.spec, { hullColor: ENEMY_HULL, sailColor });
   visual.setSailAmount(0.9); // 敌船恒近满帆
   const container = new THREE.Group();
   visual.group.rotation.y = Math.PI / 2;
   container.add(visual.group);
-  return { group: container, mast: visual.masts[0] ?? null };
+  const sails: THREE.Mesh[] = [];
+  visual.group.traverse((o) => {
+    const sail = o.userData.sail as { mesh: THREE.Mesh } | undefined;
+    if (sail) sails.push(sail.mesh);
+  });
+  return { group: container, mast: visual.masts[0] ?? null, sails };
 }
 
 export class EnemyFleet {
@@ -182,6 +187,7 @@ export class EnemyFleet {
       parts: buildPartsFor(defId, hullHp), // 敌船同规则挂部件（帆装毁了自然变慢）
     });
     ship.mastVisual = vis.mast;
+    ship.sailMeshes = vis.sails; // 帆面爬火/烧焦用
     ship.archetype = archetype;
     ship.mapColor = spec.mapColor;
     // 程序化船体的吃水：比旧版略抬，防大浪穿模透过甲板
