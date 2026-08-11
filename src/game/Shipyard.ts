@@ -331,9 +331,13 @@ export function buildShip(
   });
 
   function setSailAmount(amount: number): void {
-    for (const s of sails) applySail(s, amount);
-    // 收帆时帆面轻微缩短
-    for (const s of sails) s.mesh.scale.y = 0.75 + 0.25 * amount;
+    const a = Math.max(0, amount); // 倒车按收帆处理
+    for (const s of sails) applySail(s, a);
+    // 明显收/落帆：帆面纵向从桅顶桁向下展开（几何以顶边为原点，scaleY 小 = 卷成一条）
+    for (const s of sails) {
+      s.mesh.scale.y = 0.05 + 0.95 * a;
+      s.mesh.visible = a > 0.02; // 帆量 0% 完全收帆不可见
+    }
   }
   setSailAmount(1);
 

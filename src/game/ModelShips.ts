@@ -262,7 +262,12 @@ export function instantiateShip(
   });
   const setSailAmount = sails.length
     ? (a: number) => {
-        for (const s of sails) s.scale.y = 0.85 + 0.15 * a;
+        const v = Math.max(0, a); // 倒车按收帆
+        // 与程序化船同一规则：大幅纵向收放，0% 完全隐藏
+        for (const s of sails) {
+          s.scale.y = 0.05 + 0.95 * v;
+          s.visible = v > 0.02;
+        }
       }
     : null;
 
