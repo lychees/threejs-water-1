@@ -62,6 +62,7 @@ export function updateFanViz(
   player: GameShip,
   heightAt: WaveHeightAt,
   elevVy: number,
+  azimuth = 0,
 ): void {
   if (charge === null) {
     mesh.visible = false;
@@ -78,7 +79,7 @@ export function updateFanViz(
   let baseSpeed: number;
   let halfAng: number;
   if (side === 0) {
-    dirAng = player.heading;
+    dirAng = player.heading - azimuth; // 艏炮：正 azimuth 向右舷侧偏转（与 Combat.fireBowShot 一致）
     sx = pp.x + Math.sin(player.heading) * 4.2 * ls;
     sz = pp.z + Math.cos(player.heading) * 4.2 * ls;
     vy = elevVy;
@@ -88,7 +89,8 @@ export function updateFanViz(
   } else {
     const dx = -side * Math.cos(player.heading); // 舷侧方向与 Combat.fireBroadside 同约定
     const dz = side * Math.sin(player.heading);
-    dirAng = Math.atan2(dx, dz);
+    // 水平射角：正 = 偏船头（左舷减角、右舷加角）
+    dirAng = Math.atan2(dx, dz) + side * azimuth;
     sx = pp.x + dx * 1.5;
     sz = pp.z + dz * 1.5;
     vy = elevVy;

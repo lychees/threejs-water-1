@@ -46,6 +46,9 @@ const BASE_MODEL_LENGTH = 27;
 
 /** 射角档位（上抛初速 vy，m/s）：低平射 ↔ 高抛射。 */
 const ELEVATION_STEPS = [2, 4, 5.5, 7.5, 9.5, 12, 14] as const;
+/** 水平射角上限（弧度）：舷炮 ±57°，艏炮 ±20°。 */
+const AZIMUTH_MAX = 1.0;
+const AZIMUTH_MAX_BOW = 0.35;
 
 // ---- 船只碰撞（椭圆碰撞体 + 撞击伤害），旧 js/main.js 同名单元 ----
 const COLLISION_MIN_SPEED = 3; // 相对速度低于此值不计伤害
@@ -132,6 +135,10 @@ export class Game {
 
   /** 射角档位（上抛初速 vy）：7 档，默认第 3 档 = 旧手感 5.5。 */
   private elevationStep = 2;
+  /** 水平射角（弧度，正 = 偏向船头）：蓄力时鼠标左右移动调节，每舷/艏炮独立记忆。 */
+  private azimuthL = 0;
+  private azimuthR = 0;
+  private azimuthBow = 0;
 
   private readonly keys = new Set<string>();
   private readonly collisionCooldowns = new Map<string, number>();
@@ -221,6 +228,8 @@ export class Game {
     // 蓄力期间滚轮调射角：capture 阶段拦截，boat 相机的滚轮缩放（冒泡阶段
     // 挂在 canvas 上）被 stopPropagation 挡掉；未蓄力时完全放行。
     window.addEventListener('wheel', this.onWheel, { capture: true, passive: false, signal });
+    // 蓄力期间鼠标左右移动调水平射角（此时相机拖拽环视已被 chaseDragFilter 抑制）
+    window.addEventListener('mousemove', this.onAimMove, { signal });
 
     this.begin();
 
@@ -424,9 +433,9 @@ export class Game {
     if (this.chargeL !== null) this.chargeL += dt;
     if (this.chargeR !== null) this.chargeR += dt;
     if (this.chargeBow !== null) this.chargeBow += dt;
-    updateFanViz(this.fanL, this.chargeL, -1, player, this.heightAt, this.elevationVy);
-    updateFanViz(this.fanR, this.chargeR, 1, player, this.heightAt, this.elevationVy);
-    updateFanViz(this.fanBow, this.chargeBow, 0, player, this.heightAt, this.elevationVy);
+    updateFanViz(this.fanL, this.chargeL, -1, player, this.heightAt, this.elevationVy, this.azimuthL);
+    updateFanViz(this.fanR, this.chargeR, 1, player, this.heightAt, this.elevationVy, this.azimuthR);
+    updateFanViz(this.fanBow, this.chargeBow, 0, player, this.heightAt, this.elevationVy, this.azimuthBow);
 
     // ---- 冷却 ----
     this.cooldownL = Math.max(0, this.cooldownL - dt);
@@ -582,6 +591,7 @@ export class Game {
       this.fleet.wave,
       this.loot,
       this.elevationDegrees,
+      this.azimuthDegrees,
       this.chargeL !== null || this.chargeR !== null || this.chargeBow !== null,
     );
     this.hud.updateEnemyHpBars(dt, this.fleet.enemies, this.camera);
@@ -694,6 +704,24 @@ export class Game {
     return Math.round(THREE.MathUtils.radToDeg(Math.atan(this.elevationVy / FEEL.BROADSIDE_SPEED)));
   }
 
+  /** 显示用的水平射角（度；正 = 偏船头）。显示当前正在蓄力那舷的值。 */
+  get azimuthDegrees(): number {
+    const v =
+      this.chargeL !== null ? this.azimuthL
+        : this.chargeR !== null ? this.azimuthR
+          : this.chargeBow !== null ? this.azimuthBow
+            : this.azimuthL;
+    return Math.round(THREE.MathUtils.radToDeg(v));
+  }
+
+  /** 蓄力中鼠标左右移动 = 调水平射角（偏船头/船尾扫射）。 */
+  private readonly onAimMove = (e: MouseEvent): void => {
+    const d = e.movementX * 0.0025; // 弧度/像素
+    if (this.chargeL !== null) this.azimuthL = THREE.MathUtils.clamp(this.azimuthL + d, -AZIMUTH_MAX, AZIMUTH_MAX);
+    if (this.chargeR !== null) this.azimuthR = THREE.MathUtils.clamp(this.azimuthR + d, -AZIMUTH_MAX, AZIMUTH_MAX);
+    if (this.chargeBow !== null) this.azimuthBow = THREE.MathUtils.clamp(this.azimuthBow + d, -AZIMUTH_MAX_BOW, AZIMUTH_MAX_BOW);
+  };
+
   private readonly onWheel = (e: WheelEvent): void => {
     const charging = this.chargeL !== null || this.chargeR !== null || this.chargeBow !== null;
     if (!charging) return;
@@ -753,6 +781,7 @@ export class Game {
       fromPlayer: true, // 炮数取 ship.cannons
       damageMul: (0.7 + 0.8 * p) * primeD, // 伤害随蓄力
       vy: this.elevationVy, // 射角（蓄力期间滚轮调节）
+      azimuth: side < 0 ? this.azimuthL : this.azimuthR, // 水平射角（鼠标左右）
     });
     this.audio.playCannon();
     if (side < 0) {
@@ -774,6 +803,7 @@ export class Game {
       damageMul:
         (0.7 + 0.8 * p) * (this.player.cannons <= 2 ? 1.5 : 1) * (primed ? FEEL.PRIME_DAMAGE_MUL : 1),
       vy: this.elevationVy,
+      azimuth: this.azimuthBow,
     });
     this.audio.playCannon();
     this.cooldownBow = FEEL.BOW_RELOAD;

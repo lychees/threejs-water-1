@@ -149,6 +149,7 @@ export class GameHud {
     wave: number,
     loot = 0,
     elevationDeg = 0,
+    azimuthDeg = 0,
     charging = false,
   ): void {
     const c = this.shown;
@@ -213,12 +214,13 @@ export class GameHud {
       c.sailDebuff = sailD;
       this.debuffSail.textContent = sailD;
     }
-    // 射角：蓄力时高亮，平时淡显
-    const elevText = `仰角 ↗${elevationDeg}°`;
+    // 射角：蓄力时高亮，平时淡显（方位正=偏船头/负=偏船尾）
+    const azText = azimuthDeg === 0 ? '' : ` 方位 ${azimuthDeg > 0 ? '艏' : '艉'}${Math.abs(azimuthDeg)}°`;
+    const elevText = `仰角 ↗${elevationDeg}°${azText}`;
     if (elevText !== c.elevation || charging !== c.charging) {
       c.elevation = elevText;
       c.charging = charging;
-      this.elevationEl.textContent = charging ? `${elevText}（滚轮调节）` : elevText;
+      this.elevationEl.textContent = charging ? `${elevText}（滚轮仰角·鼠标方位）` : elevText;
       this.elevationEl.classList.toggle('is-charging', charging);
     }
   }

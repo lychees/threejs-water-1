@@ -162,7 +162,8 @@ export class Combat {
     return Math.max(3, Math.round(count * this.particleScale));
   }
 
-  /** 舷侧齐射。side: -1 左舷 / +1 右舷。vy 为上抛初速（射角，默认 5.5 旧手感）。 */
+  /** 舷侧齐射。side: -1 左舷 / +1 右舷。vy 为上抛初速（射角，默认 5.5 旧手感）。
+   *  azimuth 水平射角（弧度，正 = 偏向船头扫射）。 */
   fireBroadside(
     ship: GameShip,
     side: -1 | 1,
@@ -173,6 +174,7 @@ export class Combat {
       fromPlayer?: boolean;
       damageMul?: number;
       vy?: number;
+      azimuth?: number;
     } = {},
   ): void {
     const {
@@ -182,9 +184,13 @@ export class Combat {
       fromPlayer = true,
       damageMul = 1,
       vy = 5.5,
+      azimuth = 0,
     } = opts;
-    // 舷侧方向：右舷 = (-cos h, 0, sin h)（旧版约定，与 GameShip.heading 同源）
-    const dir = new THREE.Vector3(-side * Math.cos(ship.heading), 0, side * Math.sin(ship.heading));
+    // 舷侧方向：右舷 = (-cos h, 0, sin h)（旧版约定，与 GameShip.heading 同源）；
+    // 水平射角：dirAng 空间里 side×azimuth 即"朝船头偏转"（左舷基角 π/2、右舷 -π/2）
+    const baseAng = Math.atan2(-side * Math.cos(ship.heading), side * Math.sin(ship.heading));
+    const ang = baseAng + side * azimuth;
+    const dir = new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang));
     const fwd = ship.forward;
 
     for (let i = 0; i < count; i++) {
@@ -218,10 +224,11 @@ export class Combat {
     }
   }
 
-  /** 艏炮：朝船头单发，弹道平直、初速略高（玩家专用）。vy 默认 2.5 低平弹道。 */
-  fireBowShot(ship: GameShip, opts: { speed?: number; damageMul?: number; vy?: number } = {}): void {
-    const { speed = 36, damageMul = 1, vy = 2.5 } = opts;
-    const fwd = ship.forward.clone();
+  /** 艏炮：朝船头单发，弹道平直、初速略高（玩家专用）。vy 默认 2.5 低平弹道；azimuth 水平射角（弧度，正=偏右舷侧）。 */
+  fireBowShot(ship: GameShip, opts: { speed?: number; damageMul?: number; vy?: number; azimuth?: number } = {}): void {
+    const { speed = 36, damageMul = 1, vy = 2.5, azimuth = 0 } = opts;
+    const ang = ship.heading - azimuth; // 正 azimuth（鼠标右移）= 向右舷侧偏转
+    const fwd = new THREE.Vector3(Math.sin(ang), 0, Math.cos(ang));
     const start = ship.position.clone().addScaledVector(fwd, 4.2 * (ship.lengthScale || 1));
     start.y += 1.4;
     const vel = fwd.multiplyScalar(speed);
