@@ -7,6 +7,7 @@
  */
 
 import * as THREE from 'three/webgpu';
+import type { PartKind, PartSpec } from './GameShip';
 
 // ================= 类型 =================
 
@@ -71,6 +72,8 @@ export interface ShipStats {
 export interface ShipVisual {
   group: THREE.Group;
   setSailAmount(amount: number): void;
+  /** 桅杆节点（与 spec.masts 同序）：桅杆部件毁损时倾倒第一根做视觉反馈。 */
+  masts: THREE.Object3D[];
 }
 
 // ================= 数值映射（大航海时代2 原始数值 -> 游戏属性） =================
@@ -301,6 +304,7 @@ export function buildShip(
   group.add(buildHull(effSpec));
 
   const sails: Sail[] = [];
+  const masts: THREE.Object3D[] = [];
   const deckY = spec.boxy ? spec.depth * 0.72 : spec.depth * 0.78;
   for (const m of spec.masts || []) {
     const mastZ = m.z * spec.length;
@@ -310,6 +314,7 @@ export function buildShip(
     );
     mast.position.set(0, deckY + m.h / 2, mastZ);
     group.add(mast);
+    masts.push(mast);
 
     if (m.sail && m.sail.type !== 'none') {
       const sailSpec = sailColor ? { ...m.sail, color: sailColor } : m.sail;
@@ -332,7 +337,7 @@ export function buildShip(
   }
   setSailAmount(1);
 
-  return { group, setSailAmount };
+  return { group, setSailAmount, masts };
 }
 
 // ================= 25 船配置表 =================
@@ -372,6 +377,67 @@ export const SHIP_DEFS: ShipDef[] = [
 ];
 
 export const DEFAULT_SHIP_DEF_ID = 10; // 卡拉克帆船（= 基座自带的 dutch_ship_medium）
+
+// ================= 部件血量配置 =================
+// 数值为船体 HP 的比例；hullMul 是船体 HP 倍率（乘在 ships.json 映射的 hp 上）。
+// sails 与 oars 互斥：日式/桨帆船型用 oars（毁损极速 ×0.5），其余用 sails
+// （毁损帆量上限压 40%）；rudder 毁损舵效 ×0.35；mast 给大中型多桅船
+// （毁损时等效伤害连锁到帆装 + 程序化船视觉倾倒一根桅杆）。
+
+export interface PartsRatio {
+  hullMul?: number;
+  sails?: number;
+  oars?: number;
+  rudder?: number;
+  mast?: number;
+}
+
+export const SHIP_PARTS: Record<number, PartsRatio> = {
+  1: { sails: 0.35, rudder: 0.2 }, // 巴尔萨筏船：小快脆
+  2: { sails: 0.5, rudder: 0.3 }, // 汉萨柯克船
+  3: { sails: 0.4, rudder: 0.22 }, // 阿拉伯三角帆船：轻快
+  4: { sails: 0.5, rudder: 0.3 }, // 巴斯船
+  5: { sails: 0.35, rudder: 0.2 }, // 塔莱特船：小快脆
+  6: { sails: 0.45, rudder: 0.25 }, // 拉丁卡拉维尔
+  7: { sails: 0.45, rudder: 0.25 }, // 圆帆卡拉维尔
+  8: { sails: 0.5, rudder: 0.28 }, // 双桅横帆船
+  9: { sails: 0.55, rudder: 0.3, mast: 0.45 }, // 纳奥船
+  10: { sails: 0.55, rudder: 0.28, mast: 0.5 }, // 卡拉克帆船
+  11: { sails: 0.6, rudder: 0.22, mast: 0.5 }, // 盖伦帆船：大型战舰部件厚、舵脆
+  12: { sails: 0.45, rudder: 0.25 }, // 谢贝克船
+  13: { sails: 0.38, rudder: 0.2 }, // 纵帆快船：小快脆
+  14: { sails: 0.35, rudder: 0.2 }, // 单桅帆船：小快脆
+  15: { sails: 0.6, rudder: 0.22, mast: 0.5 }, // 巡航护卫舰：同盖伦思路
+  16: { sails: 0.55, rudder: 0.32, mast: 0.45 }, // 大型驳船：笨重但舵厚实
+  17: { sails: 0.65, rudder: 0.22, mast: 0.55 }, // 全帆装船：帆装最重
+  18: { sails: 0.7, rudder: 0.3 }, // 中式戎克：硬帆耐打 ×1.4
+  19: { oars: 0.55, rudder: 0.25 }, // 轻型桨帆船
+  20: { sails: 0.6, rudder: 0.24, mast: 0.5 }, // 佛兰德盖伦
+  21: { oars: 0.65, rudder: 0.28, mast: 0.45 }, // 威尼斯加莱赛：桨厚
+  22: { oars: 0.7, rudder: 0.26 }, // 皇家桨帆船：桨最厚
+  23: { hullMul: 1.6, oars: 0.65, rudder: 0.3 }, // 铁甲船：船体 ×1.6、强桨
+  24: { hullMul: 1.25, oars: 0.6, rudder: 0.3 }, // 安宅船：日式楼船，船体略厚
+  25: { oars: 0.55, rudder: 0.25 }, // 关船：小桨船
+};
+
+/** 生成一艘船的部件表（HP 绝对值）。无配置的船型回落到通用帆船三部件。 */
+export function buildPartsFor(defId: number, hullHp: number): PartSpec[] {
+  const r = SHIP_PARTS[defId] ?? { sails: 0.5, rudder: 0.3 };
+  const parts: PartSpec[] = [];
+  const push = (kind: PartKind, ratio: number | undefined): void => {
+    if (ratio !== undefined) parts.push({ kind, maxHp: Math.max(5, Math.round(hullHp * ratio)) });
+  };
+  push('sails', r.sails);
+  push('oars', r.oars);
+  push('rudder', r.rudder);
+  push('mast', r.mast);
+  return parts;
+}
+
+/** 船体 HP 倍率（铁甲船 1.6 等）；无配置 = 1。 */
+export function hullMulFor(defId: number): number {
+  return SHIP_PARTS[defId]?.hullMul ?? 1;
+}
 
 export function getShipDef(id: number): ShipDef {
   return SHIP_DEFS.find((d) => d.id === id) ?? SHIP_DEFS.find((d) => d.id === DEFAULT_SHIP_DEF_ID)!;

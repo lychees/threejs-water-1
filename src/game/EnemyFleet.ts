@@ -11,7 +11,7 @@
 
 import * as THREE from 'three/webgpu';
 import { GameShip, type WaveHeightAt } from './GameShip';
-import { buildShip, getShipDef, BASE_LENGTH } from './Shipyard';
+import { buildShip, getShipDef, buildPartsFor, hullMulFor, BASE_LENGTH } from './Shipyard';
 import type { Combat } from './Combat';
 
 const ENEMY_HULL = 0x3a3f4a; // 深灰船体
@@ -80,14 +80,17 @@ export interface FleetHooks {
 }
 
 /** 程序化船是 +Z 船头，转到 GameShip 容器（+X 船头约定）下要 yaw +π/2。 */
-function wrapEnemyVisual(defId: number, sailColor = ENEMY_SAIL): THREE.Group {
+function wrapEnemyVisual(
+  defId: number,
+  sailColor = ENEMY_SAIL,
+): { group: THREE.Group; mast: THREE.Object3D | null } {
   const def = getShipDef(defId);
   const visual = buildShip(def.spec, { hullColor: ENEMY_HULL, sailColor });
   visual.setSailAmount(0.9); // 敌船恒近满帆
   const container = new THREE.Group();
   visual.group.rotation.y = Math.PI / 2;
   container.add(visual.group);
-  return container;
+  return { group: container, mast: visual.masts[0] ?? null };
 }
 
 export class EnemyFleet {
@@ -135,13 +138,17 @@ export class EnemyFleet {
 
     const angle = Math.random() * Math.PI * 2;
     const dist = 150 + Math.random() * 90;
-    const ship = new GameShip(wrapEnemyVisual(defId), {
-      maxHp: Math.round((50 + this.wave * 15) * 2.5 * spec.hpMul), // 基底 ×2.5：拉长战斗，让 debuff 有时间发酵
+    const hullHp = Math.round((50 + this.wave * 15) * 2.5 * spec.hpMul * hullMulFor(defId)); // 基底 ×2.5：拉长战斗，让 debuff 有时间发酵
+    const vis = wrapEnemyVisual(defId);
+    const ship = new GameShip(vis.group, {
+      maxHp: hullHp,
       maxSpeed: (6.5 + this.wave * 0.4) * spec.speedMul,
       turnRate: spec.turnRate,
       cannons: spec.fireCount,
       lengthScale,
+      parts: buildPartsFor(defId, hullHp), // 敌船同规则挂部件（帆装毁了自然变慢）
     });
+    ship.mastVisual = vis.mast;
     ship.archetype = archetype;
     ship.mapColor = spec.mapColor;
     // 程序化船体的吃水：比旧版略抬，防大浪穿模透过甲板

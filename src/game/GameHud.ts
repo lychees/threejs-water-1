@@ -7,6 +7,7 @@
 
 import * as THREE from 'three/webgpu';
 import type { GameShip } from './GameShip';
+import { PART_INFO, type PartKind } from './GameShip';
 import { ARCHETYPES } from './EnemyFleet';
 
 const EHP_POOL_SIZE = 8;
@@ -47,6 +48,10 @@ export class GameHud {
   private readonly hitFlashEl: HTMLElement;
   private readonly ehpPool: { el: HTMLElement; fill: HTMLElement; name: HTMLElement }[] = [];
   private readonly ehpVec = new THREE.Vector3();
+  private readonly partsRow: HTMLElement;
+  /** 部件芯片（hull 永远第一，其余按船型配置）；kinds 签名变了才重建。 */
+  private partChips: { kind: PartKind | 'hull'; chip: HTMLElement; fill: HTMLElement; shown: string }[] = [];
+  private partsKey = '';
 
   constructor(root: HTMLElement) {
     // ---- 左下：玩家状态 ----
@@ -80,6 +85,10 @@ export class GameHud {
     this.debuffSail = el('span', 'ghud__debuff', '');
     debuffs.append(this.debuffFire, this.debuffLeak, this.debuffSail);
     status.append(debuffs);
+
+    // ---- 部件状态条（🛡船体 + 按船型 3~4 个部件，迷你血条绿→黄→红→黑） ----
+    this.partsRow = el('div', 'ghud__parts');
+    status.append(this.partsRow);
 
     // ---- 右上：战绩 ----
     const score = el('section', 'ghud ghud--score');
@@ -226,6 +235,42 @@ export class GameHud {
       c.charging = charging;
       this.elevationEl.textContent = charging ? `${elevText}（滚轮仰角·鼠标方位）` : elevText;
       this.elevationEl.classList.toggle('is-charging', charging);
+    }
+    this.updateParts(player);
+  }
+
+  /** 部件状态条：船体 + 当前船型的部件，血条绿→黄→红，毁损变黑变暗。 */
+  private updateParts(player: GameShip): void {
+    const key = player.parts.map((p) => p.kind).join(',');
+    if (key !== this.partsKey) {
+      this.partsKey = key;
+      this.partsRow.textContent = '';
+      this.partChips = [];
+      const mk = (kind: PartKind | 'hull', icon: string, label: string): void => {
+        const chip = el('span', 'ghud__part');
+        chip.title = label;
+        const bar = el('span', 'ghud__part-bar');
+        const fill = el('span', 'ghud__part-fill');
+        bar.append(fill);
+        chip.append(el('i', 'ghud__part-icon', icon), bar);
+        this.partsRow.append(chip);
+        this.partChips.push({ kind, chip, fill, shown: '' });
+      };
+      mk('hull', '🛡', '船体');
+      for (const p of player.parts) mk(p.kind, PART_INFO[p.kind].icon, PART_INFO[p.kind].label);
+    }
+    for (const chip of this.partChips) {
+      const part = chip.kind === 'hull' ? null : player.parts.find((p) => p.kind === chip.kind);
+      const ratio = chip.kind === 'hull' ? player.hp / player.maxHp : part ? part.hp / part.maxHp : 0;
+      const pct = Math.round(Math.max(0, ratio) * 100);
+      const dead = pct <= 0;
+      // 绿 120° → 红 0°；毁损纯黑
+      const state = `${pct}|${dead}`;
+      if (state === chip.shown) continue;
+      chip.shown = state;
+      chip.fill.style.width = `${pct}%`;
+      chip.fill.style.background = dead ? '#1a1a1a' : `hsl(${Math.round(120 * (pct / 100))}, 75%, 42%)`;
+      chip.chip.classList.toggle('is-dead', dead);
     }
   }
 

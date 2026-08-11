@@ -25,7 +25,8 @@ export interface Cannonball {
   damageMul: number;
 }
 
-export type HitHandler = (ball: Cannonball, target: HitTarget) => void;
+/** hitPos：炮弹命中点（世界坐标，部位伤害判定用；回调内立即使用，勿留存引用）。 */
+export type HitHandler = (ball: Cannonball, target: HitTarget, hitPos: THREE.Vector3) => void;
 
 // ---- 一次性粒子簇 ----
 class Burst {
@@ -407,7 +408,7 @@ export class Combat {
           const dz = pos.z - sp.z;
           if (dx * dx + dz * dz < hr * hr && pos.y > sp.y - 1.5 && pos.y < sp.y + 6) {
             this.explosion(pos.clone());
-            onHit(b, t);
+            onHit(b, t, pos);
             dead = true;
             break;
           }

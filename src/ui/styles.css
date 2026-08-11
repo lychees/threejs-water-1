@@ -1740,6 +1740,48 @@ body {
   padding: 1px 7px;
 }
 
+/* 部件状态条：图标 + 迷你血条（颜色由 JS 按血量比例写），毁损变暗 */
+.ghud__parts {
+  display: flex;
+  gap: 7px;
+  margin-top: 6px;
+}
+
+.ghud__part {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(10, 14, 18, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  padding: 2px 6px;
+}
+
+.ghud__part.is-dead {
+  opacity: 0.4;
+  border-color: rgba(255, 80, 60, 0.5);
+}
+
+.ghud__part-icon {
+  font-style: normal;
+  font-size: 12px;
+}
+
+.ghud__part-bar {
+  width: 34px;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.ghud__part-fill {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: hsl(120, 75%, 42%);
+}
+
 /* --------------------------------------------------------------------------
    Minimap / touch fire / 定制行（阶段 B3）
    -------------------------------------------------------------------------- */

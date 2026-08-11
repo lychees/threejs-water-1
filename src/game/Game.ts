@@ -19,7 +19,7 @@ import type { Ship } from '../scene/Ship';
 import type { AssetLoader } from '../scene/AssetLoader';
 import type { ShipController } from '../physics/ShipController';
 import type { AudioSystem } from '../audio';
-import { GameShip, DEBUFF_DEFS, type WaveHeightAt } from './GameShip';
+import { GameShip, DEBUFF_DEFS, PART_INFO, type PartKind, type ShipPart, type WaveHeightAt } from './GameShip';
 import { Combat, type HitTarget, type Cannonball } from './Combat';
 import { EnemyFleet } from './EnemyFleet';
 import { GameHud, ENEMY_HP_BAR_TIME, dmgFontSize } from './GameHud';
@@ -31,6 +31,8 @@ import {
   getShipDef,
   resolveShipId,
   resolveCustomization,
+  buildPartsFor,
+  hullMulFor,
   BASE_LENGTH,
   type ShipDef,
   type ShipCustomization,
@@ -182,12 +184,14 @@ export class Game {
     // ---- 所选船型：属性（ships.json 映射） + 外观（含精致模型/染色/船首像） ----
     const def = getShipDef(resolveShipId());
     const stats = options.shipStats[def.id];
+    const hullHp = Math.round(stats.hp * hullMulFor(def.id)); // 铁甲船等船体倍率
     this.player = new GameShip(options.player.object, {
-      maxHp: stats.hp,
+      maxHp: hullHp,
       maxSpeed: stats.maxSpeed,
       turnRate: stats.turnRate,
       cannons: stats.cannons,
       lengthScale: def.spec.length / BASE_LENGTH,
+      parts: buildPartsFor(def.id, hullHp),
     });
     this.applyPlayerVisual(def, resolveCustomization(), options.assets);
     this.player.revive();
@@ -347,6 +351,7 @@ export class Game {
         fh.position.set(0, 1.05 * lengthScale, lengthScale * BASE_LENGTH * 0.46);
         node.add(fh);
       }
+      this.player.mastVisual = null; // 默认无桅杆视觉；程序化路径在 mount 后补挂
       this.playerSail?.(Math.max(0, this.sailAmount));
     };
 
@@ -398,6 +403,7 @@ export class Game {
       def.spec.length / BASE_LENGTH,
       0.55 * (def.spec.length / BASE_LENGTH),
     );
+    this.player.mastVisual = visual.masts[0] ?? null; // 桅杆部件毁损时倾倒这根
   }
 
   /** 出航：初始 60% 帆，两艘敌船。 */
@@ -480,7 +486,7 @@ export class Game {
         FEEL.RUDDER_MIN_EFF + (1 - FEEL.RUDDER_MIN_EFF) * Math.pow(speedRatio, FEEL.RUDDER_CURVE);
       const rudderDir = player.speed < -0.3 ? -1 : 1;
       const weatherTurnMul = raining ? 0.85 : 1; // 雨天操控略钝
-      player.heading += turn * player.turnRate * rudderEff * rudderDir * weatherTurnMul * dt;
+      player.heading += turn * player.turnRate * player.turnMul * rudderEff * rudderDir * weatherTurnMul * dt;
     }
 
     // ---- 蓄力进度推进 + 扇面预览 ----
@@ -552,7 +558,9 @@ export class Game {
       this.audio.playSplash(0.4); // 小水花（拾取/漏水级，非炮弹级）
       if (event.kind === 'repair') {
         player.hp = Math.min(player.maxHp, player.hp + (this.supplies?.repairAmount ?? 10));
-        this.hud.floatText('+10 修复');
+        // 修理桶同时修复最破损的部件 30%（部件是结构性损伤，这是唯一修复途径）
+        const fixed = player.repairWorstPart(0.3);
+        this.hud.floatText(fixed ? `+10 修复 · ${PART_INFO[fixed.kind].label} +30%` : '+10 修复');
       } else {
         this.loot += 1;
         this.hud.floatText('+1 战利品');
@@ -927,11 +935,30 @@ export class Game {
 
   // ------------------------------------------------------------------ 命中与碰撞
 
-  private readonly onHit = (ball: Cannonball, target: HitTarget): void => {
+  private readonly onHit = (ball: Cannonball, target: HitTarget, hitPos: THREE.Vector3): void => {
     const base = target.isPlayer ? 12 : 20;
     const dmg = base * (ball.damageMul ?? 1);
     this.audio.playHit();
-    const sunk = target.ship.takeDamage(dmg);
+    // ---- 部位伤害：甲板以上命中分派到部件（部件吃 60%，40% 溢出船体；
+    // 部件已毁则全额打船体）。选这个模型是因为每发炮弹都保持沉船威胁，
+    // 击杀节奏不被部件血量稀释，瞄高处则换来结构性削弱 ----
+    let hullDmg = dmg;
+    let broken: ShipPart[] = [];
+    if (target.ship instanceof GameShip && target.ship.parts.length > 0) {
+      const kind = this.assignPart(target.ship, hitPos);
+      if (kind !== null) {
+        broken = target.ship.damagePart(kind, dmg * 0.6);
+        hullDmg = dmg * 0.4;
+      }
+    }
+    const sunk = target.ship.takeDamage(hullDmg);
+    for (const p of broken) {
+      if (target.isPlayer) {
+        this.hud.floatText(PART_INFO[p.kind].brokenText);
+      } else {
+        this.hud.floatTextAt(`敌船${PART_INFO[p.kind].brokenText}`, target.ship.position, this.camera);
+      }
+    }
     if (target.isPlayer) this.hud.hitFlash(); // 受击红晕
     if (!target.isPlayer && ball.fromPlayer) {
       // 玩家造成的伤害：白字漂浮 + 敌船血条
@@ -966,6 +993,29 @@ export class Game {
     }
     // 玩家被打沉由 update 里的 player.sinking 检查统一接管（含着火致死）
   };
+
+  /**
+   * 部位分派：命中点低于甲板（≈1.0×船长倍数）→ 船体（null）；高于甲板 →
+   * 帆装/船桨与桅杆按 65/35 权重；船尾 1/4 区域先以 55% 概率判船舵。
+   * 只分派未毁损部件，无候选回落船体。
+   */
+  private assignPart(ship: GameShip, hitPos: THREE.Vector3): PartKind | null {
+    const relY = hitPos.y - ship.position.y;
+    if (relY <= 1.0 * ship.lengthScale) return null; // 水线/甲板以下 = 船体
+    const alive = (k: PartKind): boolean => ship.parts.some((p) => p.kind === k && p.hp > 0);
+    const dx = hitPos.x - ship.position.x;
+    const dz = hitPos.z - ship.position.z;
+    // 船身局部纵向坐标：+1 船头 ~ -1 船尾（4.5×倍数 ≈ 半船长）
+    const along =
+      (dx * Math.sin(ship.heading) + dz * Math.cos(ship.heading)) / (4.5 * ship.lengthScale);
+    if (along < -0.5 && alive('rudder') && Math.random() < 0.55) return 'rudder';
+    const rig: PartKind | null = alive('sails') ? 'sails' : alive('oars') ? 'oars' : null;
+    const mast = alive('mast');
+    if (rig && mast) return Math.random() < 0.65 ? rig : 'mast';
+    if (rig) return rig;
+    if (mast) return 'mast';
+    return null;
+  }
 
   /**
    * 在 pos 附近找水面点（掉补给用）：沿高度下降最快的方向走到水下，
