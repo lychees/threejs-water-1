@@ -9,6 +9,7 @@
 
 import * as THREE from 'three/webgpu';
 import { fetchCoastlines, type BBox } from './overpass';
+import { fetchElevation } from './elevation';
 import { buildHeightField, buildFieldFromMask, sampleHeight, GRID, type HeightField } from './heightfield';
 
 // 测试钩子（与 __game/__ocean 同待遇）：分类器可用合成海岸线直接单测。
@@ -17,7 +18,7 @@ import { buildHeightField, buildFieldFromMask, sampleHeight, GRID, type HeightFi
 /** 区域中心（世界坐标）。迷雾岛在 (-1150,-780)，原点在高原浅水区，这里两边都不沾。 */
 export const CUSTOM_CENTER = { x: 6000, z: 6000 };
 
-const MESH_SEGMENTS = 192; // 地形网格密度（384 高度场的半价采样）
+const MESH_SEGMENTS = 256; // 地形网格密度（真实山脊需要比半价更高）
 
 export class Terrain {
   readonly mesh: THREE.Mesh;
@@ -47,15 +48,18 @@ export class Terrain {
       cachedMask = null;
     }
 
+    // 真实高程与海岸线拉取并行（高程失败 → null → 合成高程回退，不阻塞）
+    const elevationPromise = fetchElevation(bbox);
+
     let field;
     if (cachedMask) {
       console.info('[terrain] 命中本地缓存，跳过 Overpass');
-      field = buildFieldFromMask(bbox, cachedMask);
+      field = buildFieldFromMask(bbox, cachedMask, await elevationPromise);
     } else {
       const { lines, nodeCount } = await fetchCoastlines(bbox);
       if (lines.length === 0) throw new Error('该区域没有海岸线数据');
       console.info(`[terrain] 海岸线 ${lines.length} 条 / ${nodeCount} 节点，开始光栅化`);
-      field = buildHeightField(bbox, lines);
+      field = buildHeightField(bbox, lines, await elevationPromise);
       // 写缓存（147KB 掩码 → ~196KB base64，放得下 localStorage；写失败不碍事）
       try {
         let bin = '';
@@ -154,18 +158,22 @@ export class Terrain {
     const sand = new THREE.Color(0xc2b280);
     const grass = new THREE.Color(0x4a7a3f);
     const rock = new THREE.Color(0x6a6a66);
+    const snow = new THREE.Color(0xe8ecef);
     const underwater = new THREE.Color(0x9a8f6a);
     const c = new THREE.Color();
+    // 真实高程下的色带按自适应峰高分档（与 heightfield 的压缩目标同式）
+    const peak = Math.max(30, Math.min(120, sizeX * 0.02));
     for (let i = 0; i < pos.count; i++) {
       const lx = pos.getX(i);
       const lz = pos.getZ(i);
       const h = this.height(lx, lz);
       pos.setY(i, h);
-      // 高程配色：水下沙 → 沙滩 → 植被 → 岩
+      // 高程配色：水下沙 → 沙滩 → 植被 → 岩 →（高峰）雪
       if (h < 0) c.copy(underwater);
       else if (h < 2) c.copy(sand);
-      else if (h < 12) c.copy(sand).lerp(grass, (h - 2) / 10);
-      else c.copy(grass).lerp(rock, Math.min(1, (h - 12) / 14));
+      else if (h < peak * 0.35) c.copy(sand).lerp(grass, (h - 2) / (peak * 0.35 - 2));
+      else if (h < peak * 0.7) c.copy(grass).lerp(rock, (h - peak * 0.35) / (peak * 0.35));
+      else c.copy(rock).lerp(snow, Math.min(1, (h - peak * 0.7) / (peak * 0.2)));
       colors[i * 3] = c.r;
       colors[i * 3 + 1] = c.g;
       colors[i * 3 + 2] = c.b;

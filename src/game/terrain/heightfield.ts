@@ -17,6 +17,7 @@
  */
 
 import type { BBox, Coastline } from './overpass';
+import type { ElevationGrid } from './elevation';
 
 export const GRID = 384;
 
@@ -47,7 +48,11 @@ function noise2(ix: number, iz: number): number {
   return (((h ^ (h >>> 16)) >>> 0) % 1000) / 1000;
 }
 
-export function buildHeightField(bbox: BBox, lines: Coastline[]): HeightField {
+export function buildHeightField(
+  bbox: BBox,
+  lines: Coastline[],
+  elev: ElevationGrid | null = null,
+): HeightField {
   const G = GRID;
 
   // 区域分类演进史：边界洪水（大陆岸误判）→ 像素偏移陆标（锯齿海岸跨墙渗漏）
@@ -165,11 +170,15 @@ export function buildHeightField(bbox: BBox, lines: Coastline[]): HeightField {
     landMask[i] = land ? 1 : 0;
   }
 
-  return buildFieldFromMask(bbox, landMask);
+  return buildFieldFromMask(bbox, landMask, elev);
 }
 
 /** 由陆地掩码重建高度场（距离变换 + 高程 + 噪声），缓存命中时免拉 Overpass。 */
-export function buildFieldFromMask(bbox: BBox, landMask: Uint8Array): HeightField {
+export function buildFieldFromMask(
+  bbox: BBox,
+  landMask: Uint8Array,
+  elev: ElevationGrid | null = null,
+): HeightField {
   const { sizeX, sizeZ } = bboxSizeMeters(bbox);
   const G = GRID;
 
@@ -177,23 +186,41 @@ export function buildFieldFromMask(bbox: BBox, landMask: Uint8Array): HeightFiel
   const distToSea = chamfer(landMask, 1, G); // 陆格 → 距最近海格
   const distToLand = chamfer(landMask, 0, G); // 海格 → 距最近陆格
 
+  // 真实高程的渐近软压缩目标峰高：按选区尺寸自适应（宽约 2%），任何选区
+  // 都有起伏但不过高。h' = H·h/(h + 0.6H)：小 h 近似线性，大 h 渐近 H/1.6 倍以上。
+  const peakTarget = Math.max(30, Math.min(120, sizeX * 0.02));
+
   // ---- 4. 高度场 ----
   const cellX = sizeX / G;
   const cellZ = sizeZ / G;
   const cell = (cellX + cellZ) / 2;
   const data = new Float32Array(G * G);
   for (let z = 0; z < G; z++) {
+    // 格点经纬度（toPx 的逆运算：行 0 = 北）
+    const lat = bbox.n - (z / (G - 1)) * (bbox.n - bbox.s);
     for (let x = 0; x < G; x++) {
       const i = z * G + x;
       const n = noise2(x >> 2, z >> 2) - 0.5;
       let y: number;
       if (landMask[i]) {
-        // 陆：0 ~ 200m 距海抬到 +28m，近岸 1 格内压到沙滩高度
         const d = distToSea[i] * cell;
-        y = 28 * Math.min(1, d / 200) + n * 3 * Math.min(1, d / 60);
-        if (d < cell * 1.5) y = Math.min(y, 0.8);
+        if (elev) {
+          // 真实高程（软压缩），近岸 2 格内向沙滩带平滑 blend 防岸线跳变
+          const lon = bbox.w + (x / (G - 1)) * (bbox.e - bbox.w);
+          const hReal = Math.max(0, elev.sample(lat, lon));
+          const hComp = (peakTarget * hReal) / (hReal + peakTarget * 0.6) + n * 2;
+          const beach = Math.min(hComp, 0.8);
+          const blend = Math.min(1, d / (cell * 2));
+          y = beach * (1 - blend) + hComp * blend;
+          // 噪声在近岸零高程处会抖出小坑：陆格最浅只到 -0.4m（潮池级别，不成洼地）
+          if (y < -0.4) y = -0.4;
+        } else {
+          // 合成：0 ~ 200m 距海抬到 +28m，近岸 1 格内压到沙滩高度
+          y = 28 * Math.min(1, d / 200) + n * 3 * Math.min(1, d / 60);
+          if (d < cell * 1.5) y = Math.min(y, 0.8);
+        }
       } else {
-        // 海：0 ~ 260m 距陆沉到 -24m（水下地形平缓过渡，近岸浅滩）
+        // 海：0 ~ 260m 距陆沉到 -24m（水下地形平缓过渡，近岸浅滩；Terrarium 海洋无数据，保持合成）
         const d = distToLand[i] * cell;
         y = -24 * Math.min(1, d / 260) + n * 1.2 * Math.min(1, d / 80);
         if (d < cell * 1.5) y = Math.max(y, -1.2);
